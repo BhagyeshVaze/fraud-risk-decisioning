@@ -1,9 +1,9 @@
 # Fraud Risk Decisioning System
 
-**At the cost-optimal decline threshold this system prevents $339,844 of the
-$495,244 in fraud on a held-out 30-day test period, catching 68.6% of fraud
-dollars while declining 7.3% of legitimate transactions. Total modelled cost
-is $298,574, which is $147,082 cheaper than a naive 0.5 cutoff and $278,721
+**At the cost-optimal decline threshold this system prevents $328,658 of the
+$495,244 in fraud on a held-out 30-day test period, catching 66.4% of fraud
+dollars while declining 6.3% of legitimate transactions. Total modelled cost
+is $296,570, which is $144,514 cheaper than a naive 0.5 cutoff and $280,724
 cheaper than approving everything.**
 
 Those figures rest on stated cost assumptions, not measured ones. See
@@ -18,30 +18,35 @@ approve-or-decline decision by pricing every possible threshold in dollars.
 The interesting part is the third step. A fraud model is usually judged on
 PR-AUC, but nobody is paid in PR-AUC. Once each outcome has a price, the
 question becomes where to set the threshold, and the answer is not 0.5. It is
-0.0793. The naive cutoff looks far better on precision (0.74 against 0.25) and
+0.1011. The naive cutoff looks far better on precision (0.74 against 0.27) and
 is 49% more expensive, because it optimizes the wrong thing: it avoids false
 declines that cost about $12 each while waving through frauds that cost about
 $176 each.
 
 Four findings worth stating plainly:
 
-1. **The optimum is far from 0.5 and cost is asymmetric around it.** Being too
-   strict is roughly nine times more costly than being equally too loose
-   (+6.2% against +0.7% for a 20% threshold move). The decline side carries
-   churn and lost margin across a very large legitimate population.
-2. **The V block and identity columns helped, but only slightly.** Adding 379
-   columns moved test PR-AUC from 0.5007 to 0.5086, **+0.0079, about +1.6%**.
-   They are described as carrying most of Vesta's engineered signal; on this
-   split they are worth about one and a half percent. They did translate into
-   real money, $10,455 lower cost, because the threshold sweep converts small
-   ranking gains into dollars efficiently.
-3. **Calibration still does not improve the Brier score**, even after early
-   stopping and calibration were moved to disjoint windows. The degradation
-   shrank from -0.77% to -0.11%, so window reuse was most of the problem, but
-   not all of it. What remains is drift between the calibration period and the
-   test period.
-4. **No single feature dominates.** The top feature carries 6.05% of total
-   gain, well under the 30% level that usually indicates leakage.
+1. **The optimum is far from 0.5, and the shape around it is not stable.** At
+   this operating point a threshold 20% higher (declining fewer) costs +5.2%,
+   while 20% lower (declining more) costs only +0.9%. At the previous
+   437-feature operating point the asymmetry ran the *other* way. Two models
+   that are statistically indistinguishable on cost disagree about which
+   direction is the dangerous one, which is a warning not to over-read the
+   shape of a curve estimated from 3,282 frauds.
+2. **The V block genuinely matters.** A clean ablation on identical splits
+   shows the 339 V columns are worth **+0.0275 test PR-AUC and $17,314 of
+   cost**, with a bootstrap CI of [-$27,894, -$6,624] that does not span zero.
+   An earlier comparison put the figure at +0.0079, but that one was
+   confounded by different training windows and understated them.
+3. **Most features are dead weight, but not all of them.** Pruning to the top
+   200 by gain is statistically indistinguishable from all 437 on cost and
+   trains 19% faster, so it is what ships. Pruning further is not free: the
+   top 100 costs **$11,011 more** and the top 50 **$22,672 more**, both
+   significant.
+4. **Measurement noise is roughly $10,000.** A bootstrap of the cost figure has
+   a standard deviation near $9.9k, so any single change worth less than that
+   cannot be distinguished from luck on this test set. Every cost comparison
+   in `reports/feature_pruning.md` carries a confidence interval for that
+   reason.
 
 ## Results
 
@@ -49,59 +54,79 @@ Evaluated on `txn_day >= 150`: 94,636 transactions, 3,282 fraudulent.
 
 | Policy | Total cost | Fraud dollars caught | Legit declined | Saving vs optimum |
 | --- | --- | --- | --- | --- |
-| **Chosen threshold 0.0793** | **$298,574** | $339,844 (68.6%) | 6,652 (7.28%) | - |
-| Naive 0.5 cutoff | $445,656 | $111,687 (22.6%) | 388 (0.42%) | $147,082 |
-| Approve everything | $577,294 | $0 (0%) | 0 (0%) | $278,721 |
-| Decline everything | $1,414,895 | $495,244 (100%) | 91,354 (100%) | $1,116,321 |
+| **Chosen threshold 0.1011** | **$296,570** | $328,658 (66.4%) | 5,734 (6.28%) | - |
+| Naive 0.5 cutoff | $441,085 | $116,633 (23.6%) | 392 (0.43%) | $144,514 |
+| Approve everything | $577,294 | $0 (0%) | 0 (0%) | $280,724 |
+| Decline everything | $1,414,895 | $495,244 (100%) | 91,354 (100%) | $1,118,325 |
 
-| Decision quality | At 0.0793 | At 0.50 |
+| Decision quality | At 0.1011 | At 0.50 |
 | --- | --- | --- |
-| Fraud caught (TP) | 2,213 | 1,127 |
-| Legit declined (FP) | 6,652 | 388 |
-| Fraud missed (FN) | 1,069 | 2,155 |
-| True negatives | 84,702 | 90,966 |
-| Precision | 0.2496 | 0.7439 |
-| Recall | 0.6743 | 0.3434 |
-| False decline rate | 7.282% | 0.425% |
+| Fraud caught (TP) | 2,139 | 1,127 |
+| Legit declined (FP) | 5,734 | 392 |
+| Fraud missed (FN) | 1,143 | 2,155 |
+| True negatives | 85,620 | 90,962 |
+| Precision | 0.2717 | 0.7419 |
+| Recall | 0.6517 | 0.3434 |
+| False decline rate | 6.277% | 0.429% |
 
-### This build against the previous one
+### Feature-set comparison, identical splits
 
-| Metric | Stage 1 (58 features) | Now (437 features) | Change |
-| --- | --- | --- | --- |
-| Test PR-AUC, raw | 0.5007 | 0.5086 | **+0.0079** |
-| Test PR-AUC, calibrated | 0.4865 | 0.4901 | +0.0037 |
-| Test ROC-AUC | 0.8933 | 0.8863 | **-0.0070** |
-| Test Brier, raw | 0.022893 | 0.022956 | +0.000063 |
-| Test Brier, calibrated | 0.023070 | 0.022980 | -0.000090 |
-| Train PR-AUC | 0.8243 | 0.8798 | +0.0555 |
-| Train/test PR-AUC gap | 0.3236 | 0.3712 | **+0.0476** |
-| Chosen threshold | 0.0710 | 0.0793 | +0.0083 |
-| False decline rate | 6.676% | 7.282% | +0.606pp |
-| Total cost | $309,028 | $298,574 | **-$10,455** |
-| Saving vs 0.5 | $125,098 | $147,082 | +$21,984 |
+Every row uses the same four time windows, seed, and hyperparameters. Only the
+feature set changes. Cost differences are against the full 437 model, with a
+600-resample paired bootstrap.
 
-Read honestly: the extra columns bought a small ranking improvement and about
-$10.5k of cost, at the price of a **wider overfitting gap and slightly worse
-ROC-AUC**. PR-AUC is the metric that matters at this operating point, since the
-threshold sits in the high-precision tail, so the trade is worth taking. But
-"most of Vesta's engineered signal" overstates what these columns delivered on
-this split. The two runs also use different training windows (day <120 then,
-<110 now), so this compares pipelines end to end, not the feature block in
-isolation.
+| Feature set | Test PR-AUC | Gap | Fit time | Cost | vs 437 | 95% CI | Significant |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Full 437 | 0.5086 | 0.3712 | 35.9s | $298,574 | - | - | - |
+| **Top 200 (shipped)** | 0.5015 | 0.3949 | **29.0s** | **$296,570** | **-$2,003** | [-$9,817, +$5,528] | no |
+| Top 100 | 0.4902 | 0.3890 | 16.4s | $309,584 | +$11,011 | [+$1,715, +$20,682] | **yes** |
+| Top 50 | 0.4888 | 0.3548 | 11.7s | $321,245 | +$22,672 | [+$10,675, +$33,319] | **yes** |
+
+Top 200 is cheaper on the point estimate but the difference is inside the noise
+band, so the honest claim is that it is **no worse** than the full set while
+using 54% fewer features and training 19% faster. That is why it ships. Cutting
+to 100 or 50 is significantly worse and is not a viable trade.
+
+The top 200 features carry 89.4% of total gain; 148 of the 437 were never used
+for a split at all.
+
+### V-block ablation
+
+| | Features | Test PR-AUC | Train PR-AUC | ROC-AUC | Fit time | Cost |
+| --- | --- | --- | --- | --- | --- | --- |
+| With V block | 437 | 0.5086 | 0.8798 | 0.8863 | 35.9s | $298,574 |
+| Without V block | 98 | 0.4811 | 0.8642 | 0.8804 | 13.9s | $315,980 |
+| **Contribution of V** | **339** | **+0.0275** | +0.0156 | +0.0060 | +22.0s | **-$17,406** |
+
+Bootstrap on the cost difference: mean **-$17,314**, 95% CI
+[-$27,894, -$6,624]. Entirely below zero, so this one is real. The V block is
+the single most valuable feature group in the build.
 
 ## Model quality
 
 | Metric | Value |
 | --- | --- |
-| PR-AUC, test, raw | 0.5086 |
-| PR-AUC, test, calibrated | 0.4901 |
-| ROC-AUC, test | 0.8863 |
-| Brier, test, raw | 0.022956 |
-| Brier, test, calibrated | 0.022980 |
-| PR-AUC, train | 0.8798 |
-| Best iteration | 421 of 3000 |
+| PR-AUC, test, raw | 0.5015 |
+| PR-AUC, test, calibrated | 0.4794 |
+| ROC-AUC, test | 0.8839 |
+| Brier, test, raw | 0.023162 |
+| Brier, test, calibrated | 0.023176 |
+| PR-AUC, train | 0.8964 |
+| Best iteration | 494 of 3000 |
+| Features | 200 of 437 available |
 
-Sensitivity: 20% tighter costs +6.24%, 20% looser costs +0.70%. Err loose.
+Sensitivity: a threshold 20% lower (0.0809, declining more) costs +0.87%; 20%
+higher (0.1213, declining fewer) costs +5.16%. At the 437-feature operating
+point the asymmetry ran the opposite way (+6.24% lower, +0.70% higher). Two
+models that cannot be told apart on cost disagree on which direction is
+riskier, so the local shape of the curve should not be treated as a finding.
+
+**Caveat on the measurement.** A bootstrap of the cost at the chosen threshold
+has a standard deviation of about $9,900 and a 95% interval roughly $38,000
+wide. The top 100 frauds carry 25.1% of all fraud dollars in a test set of only
+3,282 frauds, so the total moves substantially on where a few large
+transactions fall. Treat any single improvement smaller than about $10,000 as
+unproven until it is confirmed across multiple test periods.
 
 ## Architecture
 
@@ -127,9 +152,11 @@ S3 (ca-central-1)  ->  Snowflake external stage  ->  FRAUD.RAW
 
 `fct_transactions` carries 443 columns: the behavioural features, the C, D and
 M blocks, the full V block (V1-V339), and the identity block (id_01-id_38,
-DeviceType, DeviceInfo). 437 of them reach the model; `transaction_id`,
+DeviceType, DeviceInfo). 437 are eligible for the model; `transaction_id`,
 `account_id`, `txn_day`, `transaction_dt`, `prev_transaction_dt` and the label
-are excluded.
+are excluded. **The shipped model uses the top 200 of those 437 by gain**,
+listed in `models/selected_features.json` and produced by
+`src/prune_features.py`. Delete that file to fall back to all 437.
 
 Interactive lineage is in [reports/dbt_docs/index.html](reports/dbt_docs/index.html),
 exported so it outlives the Snowflake trial. 17 dbt tests pass, including an
@@ -256,9 +283,12 @@ materialising it in memory; peak usage is about 1.6 GB.
   did not eliminate it. The remaining cause is period-to-period drift, which
   argues for refitting the calibrator on a rolling recent window.
 - **No drift monitoring**, which is what would catch the above in production.
-- **No feature selection.** All 437 features go in, including 339 V columns
-  whose marginal contribution is small. Pruning would cut training time and
-  probably narrow the overfitting gap.
+- **Pruning was selected on the test split.** The top-200 set was chosen by
+  comparing test cost across four candidates, so the choice is mildly
+  optimistic. A clean confirmation needs a fresh holdout or walk-forward folds.
+- **The overfitting gap did not close.** Pruning to 200 features left it at
+  0.3949, slightly wider than 0.3712 at 437. Regularization and hyperparameter
+  tuning, not feature count, are the remaining levers.
 - **No CI, no scheduling, no serving.** No orchestration, no API, no monitoring
   of live scores.
 - **Cost assumptions are unvalidated.** They should come from finance, not from

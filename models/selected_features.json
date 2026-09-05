@@ -1,26 +1,7 @@
 {
-  "best_iteration": 494,
   "n_features": 200,
-  "categorical_features": [
-    "product_cd",
-    "card4",
-    "card6",
-    "p_emaildomain",
-    "r_emaildomain",
-    "m2",
-    "m3",
-    "m4",
-    "m5",
-    "m6",
-    "m8",
-    "m9",
-    "id_30",
-    "id_31",
-    "id_33",
-    "id_38",
-    "device_type",
-    "device_info"
-  ],
+  "variant": "top 200",
+  "selected_from": "gain ranking of the full 437 model",
   "features": [
     "v257",
     "v258",
@@ -222,19 +203,5 @@
     "v34",
     "v279",
     "v166"
-  ],
-  "splits": {
-    "train_max_day": 110,
-    "cal_max_day": 150
-  },
-  "metrics": {
-    "train_pr_auc": 0.8964285223707823,
-    "test_pr_auc_raw": 0.5015319183078043,
-    "test_pr_auc_cal": 0.479388258908855,
-    "test_roc_auc_raw": 0.883890022243329,
-    "test_roc_auc_cal": 0.8837955017371067,
-    "test_brier_raw": 0.02316159436889978,
-    "test_brier_cal": 0.02317621360661644
-  },
-  "seed": 42
+  ]
 }

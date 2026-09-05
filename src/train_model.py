@@ -55,15 +55,15 @@ SEED = 42
 # test>=150, with early stopping and calibration sharing the 120-149 window,
 # and 58 features (no V block, no identity columns).
 BASELINE = {
-    "label": "stage 1 (58 features, shared ES/cal window)",
-    "n_features": 58,
-    "train_pr_auc": 0.824296,
-    "test_pr_auc_raw": 0.500701,
-    "test_pr_auc_cal": 0.486468,
-    "test_roc_auc_raw": 0.893324,
-    "test_roc_auc_cal": 0.893244,
-    "test_brier_raw": 0.022893,
-    "test_brier_cal": 0.023070,
+    "label": "full 437 features, same splits",
+    "n_features": 437,
+    "train_pr_auc": 0.879783,
+    "test_pr_auc_raw": 0.508558,
+    "test_pr_auc_cal": 0.490119,
+    "test_roc_auc_raw": 0.886324,
+    "test_roc_auc_cal": 0.886009,
+    "test_brier_raw": 0.022956,
+    "test_brier_cal": 0.022980,
 }
 
 # Palette slots 1 and 2 from the design system, validated as an adjacent pair.
@@ -224,6 +224,17 @@ def main():
 
     # --- features ---------------------------------------------------------
     X, feats, cats = build_features(df)
+
+    # src/prune_features.py writes this after a pruning pass. Absent, the
+    # model uses every available feature.
+    sel_path = MODELS / "selected_features.json"
+    if sel_path.exists():
+        sel = json.loads(sel_path.read_text())
+        feats = [f for f in sel["features"] if f in X.columns]
+        cats = [c for c in cats if c in feats]
+        X = X[feats]
+        print(f"using pruned feature set: {sel['variant']}, {len(feats)} features")
+
     y = df.is_fraud.astype("int8")
     Xtr, ytr = X.loc[tr.index], y.loc[tr.index]
     Xes, yes_ = X.loc[es.index], y.loc[es.index]
@@ -323,7 +334,7 @@ def main():
                         "gain": clf.booster_.feature_importance("gain")})
     imp["pct_of_total_gain"] = imp.gain / imp.gain.sum() * 100
     imp = imp.sort_values("gain", ascending=False).reset_index(drop=True)
-    emit("### Stage 1 vs this run, side by side")
+    emit("### Full 437 vs this run, side by side")
     emit()
     cmp = pd.DataFrame([
         {"metric": "features", "stage_1": BASELINE["n_features"], "this_run": len(feats)},
@@ -340,23 +351,17 @@ def main():
     emit()
     d_pr = m["test_pr_auc_raw"] - BASELINE["test_pr_auc_raw"]
     if d_pr > 0.001:
-        emit(f"**The V block and identity columns improved test PR-AUC by "
-             f"{d_pr:+.4f}** ({BASELINE['test_pr_auc_raw']:.4f} -> "
-             f"{m['test_pr_auc_raw']:.4f}, "
-             f"{d_pr/BASELINE['test_pr_auc_raw']*100:+.1f}%).")
+        emit(f"Pruning **raised** test PR-AUC by {d_pr:+.4f}.")
     elif d_pr < -0.001:
-        emit(f"**The V block and identity columns did NOT improve test PR-AUC. "
-             f"It fell by {d_pr:+.4f}** ({BASELINE['test_pr_auc_raw']:.4f} -> "
-             f"{m['test_pr_auc_raw']:.4f}). Adding 379 columns made the model "
-             "worse on held-out data, not better.")
+        emit(f"Pruning **lowered** test PR-AUC by {d_pr:+.4f} "
+             f"({BASELINE['test_pr_auc_raw']:.4f} -> {m['test_pr_auc_raw']:.4f}). "
+             "It was adopted on cost and parsimony, not on ranking quality; "
+             "see `reports/feature_pruning.md` for the bootstrap intervals.")
     else:
-        emit(f"**The V block and identity columns made no material difference "
-             f"to test PR-AUC** ({BASELINE['test_pr_auc_raw']:.4f} -> "
-             f"{m['test_pr_auc_raw']:.4f}, change {d_pr:+.4f}).")
+        emit(f"Pruning left test PR-AUC materially unchanged "
+             f"({BASELINE['test_pr_auc_raw']:.4f} -> {m['test_pr_auc_raw']:.4f}).")
     emit()
-    emit("Note the two runs use different training windows (day <120 then, "
-         "<110 now), so this compares the pipelines end to end, not the "
-         "feature block in isolation.")
+    emit("Both runs use identical splits, so this comparison is clean.")
     emit()
 
     emit("### Top 25 features by gain")
