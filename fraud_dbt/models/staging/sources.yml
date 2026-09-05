@@ -1,0 +1,13 @@
+version: 2
+
+sources:
+  - name: raw
+    database: FRAUD
+    schema: RAW
+    description: >
+      Parquet loaded from S3 via the s3_fraud_stage external stage. Column
+      names are mixed-case quoted identifiers because INFER_SCHEMA preserved
+      the parquet casing, so they must be quoted when referenced.
+    tables:
+      - name: RAW_TRANSACTIONS
+      - name: RAW_IDENTITY

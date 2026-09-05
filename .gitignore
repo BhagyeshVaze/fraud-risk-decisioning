@@ -18,6 +18,12 @@ target/
 dbt_packages/
 logs/
 
+# macOS
+.DS_Store
+
+# Intermediate artifacts passed between pipeline stages
+reports/_*
+
 # Notebooks
 .ipynb_checkpoints/
 

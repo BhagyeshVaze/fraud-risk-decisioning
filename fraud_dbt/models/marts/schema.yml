@@ -1,0 +1,46 @@
+version: 2
+
+models:
+  - name: fct_transactions
+    description: >
+      One row per transaction with strictly backward-looking behavioural
+      features per constructed account.
+    columns:
+      - name: transaction_id
+        description: Primary key, carried through unchanged from the source.
+        tests:
+          - unique
+          - not_null
+      - name: account_id
+        description: Constructed proxy key from int_account_keys. Never null.
+        tests:
+          - not_null
+      - name: is_fraud
+        description: Label. 1 = fraud.
+        tests:
+          - accepted_values:
+              values: [0, 1]
+              quote: false
+
+  - name: dim_accounts
+    description: One row per constructed account.
+    columns:
+      - name: account_id
+        tests:
+          - unique
+          - not_null
+
+  - name: int_account_keys
+    description: Constructed account proxy with an explicit degradation tier.
+    columns:
+      - name: transaction_id
+        tests:
+          - unique
+          - not_null
+      - name: account_id
+        tests:
+          - not_null
+      - name: account_key_tier
+        tests:
+          - accepted_values:
+              values: ['full', 'no_addr', 'no_card_start', 'card_only', 'singleton']

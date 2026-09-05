@@ -1,0 +1,23 @@
+version: 2
+
+models:
+  - name: stg_transactions
+    description: Typed, snake_cased passthrough of RAW_TRANSACTIONS.
+    columns:
+      - name: transaction_id
+        tests:
+          - unique
+          - not_null
+      - name: is_fraud
+        tests:
+          - accepted_values:
+              values: [0, 1]
+              quote: false
+
+  - name: stg_identity
+    description: Typed, snake_cased passthrough of RAW_IDENTITY.
+    columns:
+      - name: transaction_id
+        tests:
+          - unique
+          - not_null

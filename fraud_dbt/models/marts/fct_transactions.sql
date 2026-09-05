@@ -1,0 +1,126 @@
+{{ config(
+    materialized='incremental',
+    unique_key='transaction_id',
+    incremental_strategy='merge',
+    on_schema_change='sync_all_columns'
+) }}
+
+-- One row per transaction, with backward-looking behavioural features per
+-- constructed account.
+--
+-- LEAKAGE CONTROL. Every window below uses:
+--     RANGE BETWEEN <bound> PRECEDING AND 1 PRECEDING
+-- The "AND 1 PRECEDING" end bound is what makes these strictly backward
+-- looking. RANGE is used rather than ROWS deliberately: RANGE compares
+-- transaction_dt values, so transactions sharing a timestamp with the current
+-- row are excluded too, not merely the current row itself. A frame ending at
+-- CURRENT ROW would fold the present into its own feature and inflate every
+-- downstream metric.
+--
+-- Consequence to expect: the first transaction of every account has NULL for
+-- all prior-window features, because it genuinely has no history. That is
+-- correct, not a defect.
+--
+-- INCREMENTAL. Windows are computed over full history first, then the result
+-- is filtered to new txn_day values. Restricting the input to new days would
+-- truncate each account's history and silently corrupt the features, so the
+-- model reads everything on every run and only the write is incremental.
+
+WITH base AS (
+
+    SELECT
+        t.*,
+        k.account_id,
+        k.account_key_tier,
+        k.is_degraded_key,
+        i.transaction_id IS NOT NULL                      AS has_identity
+    FROM {{ ref('stg_transactions') }} t
+    INNER JOIN {{ ref('int_account_keys') }} k
+        ON k.transaction_id = t.transaction_id
+    LEFT JOIN {{ ref('stg_identity') }} i
+        ON i.transaction_id = t.transaction_id
+
+),
+
+featured AS (
+
+    SELECT
+        transaction_id,
+        account_id,
+        account_key_tier,
+        is_degraded_key,
+        txn_day,
+        transaction_dt,
+        is_fraud,
+
+        transaction_amt,
+        LN(transaction_amt + 1)                           AS log_amount,
+
+        -- Strictly prior aggregates over the whole account history.
+        COUNT(*) OVER (
+            PARTITION BY account_id ORDER BY transaction_dt
+            RANGE BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+        )                                                 AS prior_txn_count,
+
+        SUM(transaction_amt) OVER (
+            PARTITION BY account_id ORDER BY transaction_dt
+            RANGE BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+        )                                                 AS prior_amt_sum,
+
+        AVG(transaction_amt) OVER (
+            PARTITION BY account_id ORDER BY transaction_dt
+            RANGE BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+        )                                                 AS prior_amt_mean,
+
+        -- Trailing velocity counts. 3600s, 86400s, 604800s.
+        COUNT(*) OVER (
+            PARTITION BY account_id ORDER BY transaction_dt
+            RANGE BETWEEN 3600 PRECEDING AND 1 PRECEDING
+        )                                                 AS txn_count_1h,
+
+        COUNT(*) OVER (
+            PARTITION BY account_id ORDER BY transaction_dt
+            RANGE BETWEEN 86400 PRECEDING AND 1 PRECEDING
+        )                                                 AS txn_count_24h,
+
+        COUNT(*) OVER (
+            PARTITION BY account_id ORDER BY transaction_dt
+            RANGE BETWEEN 604800 PRECEDING AND 1 PRECEDING
+        )                                                 AS txn_count_7d,
+
+        -- Timestamp of the most recent strictly earlier transaction.
+        MAX(transaction_dt) OVER (
+            PARTITION BY account_id ORDER BY transaction_dt
+            RANGE BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+        )                                                 AS prev_transaction_dt,
+
+        txn_hour,
+        txn_dow,
+        has_identity,
+
+        product_cd,
+        card4,
+        card6,
+        p_emaildomain,
+        r_emaildomain,
+
+        {% for i in range(1, 15) %}c{{ i }},
+        {% endfor %}
+        {% for i in range(1, 16) %}d{{ i }},
+        {% endfor %}
+        {% for i in range(1, 10) %}m{{ i }}{{ "," if not loop.last }}
+        {% endfor %}
+
+    FROM base
+
+)
+
+SELECT
+    *,
+    transaction_amt / NULLIF(prior_amt_mean, 0)           AS amt_to_prior_mean_ratio,
+    transaction_dt - prev_transaction_dt                  AS seconds_since_prev_txn
+FROM featured
+
+{% if is_incremental() %}
+WHERE txn_day > (SELECT COALESCE(MAX(txn_day), -1) FROM {{ this }})
+{% endif %}
