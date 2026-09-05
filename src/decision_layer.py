@@ -20,6 +20,18 @@ REPORTS = Path("reports")
 VERIFY = REPORTS / "verification.md"
 RESULTS = REPORTS / "stage1_results.md"
 
+# Stage 1 decision-layer results, for the side-by-side.
+BASELINE = {
+    "threshold": 0.0710,
+    "cost_opt": 309028.40,
+    "cost_naive": 434126.66,
+    "cost_approve_all": 577294.40,
+    "cost_decline_all": 1414894.91,
+    "fp": 6099, "tp": 2146, "fn": 1136, "tn": 85255,
+    "precision": 0.260279, "recall": 0.653870, "fdr": 0.066762,
+    "fraud_dollars_caught": 319336.86,
+}
+
 ASSUMPTIONS = {
     "chargeback_fee_usd": 25.0,
     "margin_rate": 0.025,
@@ -158,7 +170,8 @@ def main():
     # --- confusion ----------------------------------------------------------
     emit("### Confusion matrices, raw counts")
     emit()
-    cm = pd.DataFrame([confusion(t_opt, p, y), confusion(0.5, p, y)])
+    o_ = confusion(t_opt, p, y)
+    cm = pd.DataFrame([o_, confusion(0.5, p, y)])
     cm.insert(0, "policy", ["optimum", "naive 0.5"])
     block(cm.round(6).to_string(index=False))
     emit()
@@ -183,6 +196,71 @@ def main():
          f"**{caught_opt / fraud_dollars * 100:.2f}%**")
     emit(f"Fraud dollars as a share of all test dollars: "
          f"{fraud_dollars / total_dollars * 100:.2f}%")
+    emit()
+
+    # --- extremes reconciliation -------------------------------------------
+    emit("### Reconciling the extremes")
+    emit()
+    emit("Component arithmetic for the two boundary policies, so the cost "
+         "function can be checked by hand at the extremes.")
+    emit()
+    n_all = len(y)
+    n_fraud = int((y == 1).sum())
+    n_legit = n_all - n_fraud
+    legit_dollars = amt[y == 0].sum()
+    a = ASSUMPTIONS
+
+    dm = a["margin_rate"] * legit_dollars
+    dc = a["churn_prob_after_false_decline"] * a["account_lifetime_value_usd"] * n_legit
+    dr = a["manual_review_cost_usd"] * n_all
+    emit("**Decline everything** (threshold 0.0): FN = 0, TP = all "
+         f"{n_fraud:,} frauds, FP = all {n_legit:,} legitimate.")
+    emit()
+    block(
+        f"lost margin   0.025 x ${legit_dollars:,.2f}   = ${dm:>13,.2f}\n"
+        f"churn         0.05 x $200 x {n_legit:,}       = ${dc:>13,.2f}\n"
+        f"review        $2 x {n_all:,} declines         = ${dr:>13,.2f}\n"
+        f"fraud loss    every fraud declined            = ${0:>13,.2f}\n"
+        f"{'-'*54}\n"
+        f"TOTAL                                          = ${dm+dc+dr:>13,.2f}\n"
+        f"computed by cost_at(0.0)                       = ${c_decline_all:>13,.2f}")
+    emit()
+    emit(f"Margin plus churn alone is ${dm+dc:,.2f}. The remaining "
+         f"${dr:,.2f} is the review term: declining everything means reviewing "
+         f"all {n_all:,} transactions, fraudulent and legitimate alike. That "
+         "term is the difference between the two figures.")
+    emit()
+
+    am = amt[y == 1].sum()
+    ac = a["chargeback_fee_usd"] * n_fraud
+    emit("**Approve everything** (threshold above 1): TP = FP = 0, "
+         f"FN = all {n_fraud:,} frauds.")
+    emit()
+    block(
+        f"fraud loss    ${am:,.2f} of goods            = ${am:>13,.2f}\n"
+        f"chargebacks   $25 x {n_fraud:,}                  = ${ac:>13,.2f}\n"
+        f"review        $2 x 0 declines                 = ${0:>13,.2f}\n"
+        f"{'-'*54}\n"
+        f"TOTAL                                          = ${am+ac:>13,.2f}\n"
+        f"computed by cost_at(1.01)                      = ${c_approve_all:>13,.2f}")
+    emit()
+
+    # --- stage 1 comparison ---------------------------------------------------
+    emit("### Stage 1 vs this run, decision layer")
+    emit()
+    cmp = pd.DataFrame([
+        {"metric": "chosen threshold", "stage_1": BASELINE["threshold"], "this_run": round(t_opt, 6)},
+        {"metric": "total cost at optimum", "stage_1": BASELINE["cost_opt"], "this_run": round(c_opt, 2)},
+        {"metric": "total cost at 0.5", "stage_1": BASELINE["cost_naive"], "this_run": round(c_naive, 2)},
+        {"metric": "saving vs 0.5", "stage_1": round(BASELINE["cost_naive"] - BASELINE["cost_opt"], 2), "this_run": round(c_naive - c_opt, 2)},
+        {"metric": "saving vs approve-all", "stage_1": round(BASELINE["cost_approve_all"] - BASELINE["cost_opt"], 2), "this_run": round(c_approve_all - c_opt, 2)},
+        {"metric": "false decline rate", "stage_1": BASELINE["fdr"], "this_run": round(o_["false_decline_rate"], 6)},
+        {"metric": "precision", "stage_1": BASELINE["precision"], "this_run": round(o_["precision"], 6)},
+        {"metric": "recall", "stage_1": BASELINE["recall"], "this_run": round(o_["recall"], 6)},
+        {"metric": "fraud dollars caught", "stage_1": BASELINE["fraud_dollars_caught"], "this_run": round(caught_opt, 2)},
+    ])
+    cmp["delta"] = (cmp.this_run - cmp.stage_1).round(6)
+    block(cmp.to_string(index=False))
     emit()
 
     # --- plot ----------------------------------------------------------------

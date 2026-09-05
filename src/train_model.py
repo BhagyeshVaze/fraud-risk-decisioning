@@ -34,9 +34,14 @@ MODELS = Path("models")
 REPORTS = Path("reports")
 VERIFY = REPORTS / "verification.md"
 
-TRAIN_MAX_DAY = 120      # train:       txn_day <  120
-CAL_MAX_DAY = 150        # calibration: 120 <= txn_day < 150
-                         # test:        txn_day >= 150
+# Four disjoint windows. Early stopping and calibration are deliberately
+# separated: in the stage 1 build both used days 120-149, so the calibrator
+# was fitted on data the model had already been tuned against, which biases it
+# optimistically. They now use different windows.
+TRAIN_MAX_DAY = 110      # train:        txn_day <  110
+ES_MAX_DAY = 130         # early stop:   110 <= txn_day < 130
+CAL_MAX_DAY = 150        # calibration:  130 <= txn_day < 150
+                         # test:         txn_day >= 150
 
 # Identifiers and time indices. Leaving any of these in would let the model
 # memorise rows or read the calendar instead of behaviour.
@@ -44,6 +49,22 @@ EXCLUDE = {"transaction_id", "account_id", "txn_day", "transaction_dt",
            "is_fraud", "prev_transaction_dt"}
 
 SEED = 42
+
+# Stage 1 results, recorded so the refinement can be compared honestly rather
+# than assumed to have helped. Splits then were train<120 / cal 120-149 /
+# test>=150, with early stopping and calibration sharing the 120-149 window,
+# and 58 features (no V block, no identity columns).
+BASELINE = {
+    "label": "stage 1 (58 features, shared ES/cal window)",
+    "n_features": 58,
+    "train_pr_auc": 0.824296,
+    "test_pr_auc_raw": 0.500701,
+    "test_pr_auc_cal": 0.486468,
+    "test_roc_auc_raw": 0.893324,
+    "test_roc_auc_cal": 0.893244,
+    "test_brier_raw": 0.022893,
+    "test_brier_cal": 0.023070,
+}
 
 # Palette slots 1 and 2 from the design system, validated as an adjacent pair.
 C_BEFORE, C_AFTER = "#2a78d6", "#eb6834"
@@ -77,13 +98,34 @@ def fetch():
     cur.execute("ALTER WAREHOUSE FRAUD_WH RESUME IF SUSPENDED")
     print("pulling FCT_TRANSACTIONS...")
     cur.execute("SELECT * FROM MARTS.FCT_TRANSACTIONS")
-    df = cur.fetch_pandas_all()
-    conn.close()
-    df.columns = [c.lower() for c in df.columns]
+
+    # 443 columns x 590k rows does not fit comfortably in 8 GB as float64, so
+    # stream arrow batches straight to parquet, narrowing types on the way.
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    def shrink(t):
+        if pa.types.is_float64(t):
+            return pa.float32()
+        if pa.types.is_decimal(t):
+            return pa.int64() if t.scale == 0 else pa.float64()
+        return t
+
     CACHE.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(CACHE, index=False)
-    print(f"cached {len(df):,} rows to {CACHE}")
-    return df
+    writer, n = None, 0
+    for batch in cur.fetch_arrow_batches():
+        # This connector version yields Tables, not RecordBatches.
+        tbl = batch if isinstance(batch, pa.Table) else pa.Table.from_batches([batch])
+        schema = pa.schema([pa.field(f.name.lower(), shrink(f.type)) for f in tbl.schema])
+        tbl = tbl.rename_columns([c.lower() for c in tbl.schema.names]).cast(schema)
+        if writer is None:
+            writer = pq.ParquetWriter(CACHE, schema, compression="snappy")
+        writer.write_table(tbl)
+        n += tbl.num_rows
+    writer.close()
+    conn.close()
+    print(f"cached {n:,} rows to {CACHE}")
+    return pd.read_parquet(CACHE)
 
 
 def build_features(df):
@@ -98,7 +140,7 @@ def build_features(df):
         elif X[c].dtype == bool:
             X[c] = X[c].astype("int8")
         else:
-            X[c] = pd.to_numeric(X[c], errors="coerce").astype("float64")
+            X[c] = pd.to_numeric(X[c], errors="coerce").astype("float32")
     return X, feats, cats
 
 
@@ -145,14 +187,20 @@ def main():
 
     # --- splits -----------------------------------------------------------
     tr = df[df.txn_day < TRAIN_MAX_DAY]
-    ca = df[(df.txn_day >= TRAIN_MAX_DAY) & (df.txn_day < CAL_MAX_DAY)]
+    es = df[(df.txn_day >= TRAIN_MAX_DAY) & (df.txn_day < ES_MAX_DAY)]
+    ca = df[(df.txn_day >= ES_MAX_DAY) & (df.txn_day < CAL_MAX_DAY)]
     te = df[df.txn_day >= CAL_MAX_DAY]
 
     emit("### Time splits")
     emit()
+    emit("Four disjoint windows. Early stopping and calibration no longer "
+         "share a window, so the isotonic map is fitted on data the model was "
+         "not tuned against.")
+    emit()
     rows = []
     for name, part, rng in (("train", tr, f"txn_day < {TRAIN_MAX_DAY}"),
-                            ("calibration", ca, f"{TRAIN_MAX_DAY} <= txn_day < {CAL_MAX_DAY}"),
+                            ("early stopping", es, f"{TRAIN_MAX_DAY} <= txn_day < {ES_MAX_DAY}"),
+                            ("calibration", ca, f"{ES_MAX_DAY} <= txn_day < {CAL_MAX_DAY}"),
                             ("test", te, f"txn_day >= {CAL_MAX_DAY}")):
         fr = part.is_fraud.mean()
         rows.append({"split": name, "day_range": rng, "rows": len(part),
@@ -171,15 +219,17 @@ def main():
     else:
         emit("No split deviates more than 30% from the 0.0350 base rate.")
     emit()
-    emit(f"Total across splits: {len(tr)+len(ca)+len(te):,} of {len(df):,} rows.")
+    emit(f"Total across splits: {len(tr)+len(es)+len(ca)+len(te):,} of {len(df):,} rows.")
     emit()
 
     # --- features ---------------------------------------------------------
     X, feats, cats = build_features(df)
     y = df.is_fraud.astype("int8")
     Xtr, ytr = X.loc[tr.index], y.loc[tr.index]
+    Xes, yes_ = X.loc[es.index], y.loc[es.index]
     Xca, yca = X.loc[ca.index], y.loc[ca.index]
     Xte, yte = X.loc[te.index], y.loc[te.index]
+    del X
 
     emit("### Features")
     emit()
@@ -200,16 +250,19 @@ def main():
         num_leaves=63, min_child_samples=50, subsample=0.8, subsample_freq=1,
         colsample_bytree=0.8, reg_lambda=1.0, random_state=SEED, n_jobs=-1,
         verbose=-1)
-    clf.fit(Xtr, ytr, eval_set=[(Xca, yca)], eval_metric="average_precision",
+    clf.fit(Xtr, ytr, eval_set=[(Xes, yes_)], eval_metric="average_precision",
             categorical_feature=cats,
             callbacks=[lgb.early_stopping(100, verbose=False),
                        lgb.log_evaluation(0)])
     best_iter = clf.best_iteration_
-    emit(f"Best iteration by average_precision on the calibration split: "
-         f"**{best_iter}** of 3000 (early stopping patience 100).")
+    emit(f"Best iteration by average_precision on the **early stopping** split "
+         f"(days {TRAIN_MAX_DAY}-{ES_MAX_DAY-1}): **{best_iter}** of 3000, "
+         "patience 100.")
     emit()
 
     # --- calibrate ---------------------------------------------------------
+    # Fitted on days 130-149, which the model never saw during training or
+    # early stopping.
     cal = CalibratedClassifierCV(FrozenEstimator(clf), method="isotonic")
     cal.fit(Xca, yca)
 
@@ -248,18 +301,21 @@ def main():
     verdict = "improved" if delta > 0 else "degraded"
     emit(f"Brier {verdict} under calibration: {m['test_brier_raw']:.6f} -> "
          f"{m['test_brier_cal']:.6f} ({pct:+.2f}%).")
+    emit()
+    emit(f"Stage 1, with early stopping and calibration sharing one window, "
+         f"went {BASELINE['test_brier_raw']:.6f} -> {BASELINE['test_brier_cal']:.6f} "
+         f"(a degradation). This run uses disjoint windows.")
     if delta <= 0:
         emit()
-        emit("**FLAG: isotonic calibration did not improve the Brier score on "
-             "test.** The isotonic map is fitted on days 120-149 and applied to "
-             "days 150+, so any drift between those periods is baked into the "
-             "map. The same split is also used for early stopping, so the "
-             "model is already tuned to it. Both push the calibrator toward "
-             "the calibration period rather than the test period. See the "
-             "decile tables below: the raw top decile is near-perfect "
-             "(0.2353 predicted vs 0.2355 actual) while isotonic overshoots "
-             "it (0.2683 vs 0.2349). Calibration still helps the middle "
-             "deciles, which is where the cost-optimal threshold falls.")
+        emit("**FLAG: isotonic calibration still did not improve the Brier "
+             "score on test, even with disjoint windows.** Separating the "
+             "windows was therefore not sufficient. The remaining cause is "
+             "drift between the calibration period and the test period, not "
+             "reuse of the tuning split.")
+    else:
+        emit()
+        emit("Separating the early-stopping and calibration windows fixed the "
+             "stage 1 degradation: isotonic now improves Brier on test.")
     emit()
 
     # --- importance ---------------------------------------------------------
@@ -267,6 +323,42 @@ def main():
                         "gain": clf.booster_.feature_importance("gain")})
     imp["pct_of_total_gain"] = imp.gain / imp.gain.sum() * 100
     imp = imp.sort_values("gain", ascending=False).reset_index(drop=True)
+    emit("### Stage 1 vs this run, side by side")
+    emit()
+    cmp = pd.DataFrame([
+        {"metric": "features", "stage_1": BASELINE["n_features"], "this_run": len(feats)},
+        {"metric": "train PR-AUC", "stage_1": BASELINE["train_pr_auc"], "this_run": m["train_pr_auc"]},
+        {"metric": "test PR-AUC (raw)", "stage_1": BASELINE["test_pr_auc_raw"], "this_run": m["test_pr_auc_raw"]},
+        {"metric": "test PR-AUC (calibrated)", "stage_1": BASELINE["test_pr_auc_cal"], "this_run": m["test_pr_auc_cal"]},
+        {"metric": "test ROC-AUC (raw)", "stage_1": BASELINE["test_roc_auc_raw"], "this_run": m["test_roc_auc_raw"]},
+        {"metric": "test Brier (raw)", "stage_1": BASELINE["test_brier_raw"], "this_run": m["test_brier_raw"]},
+        {"metric": "test Brier (calibrated)", "stage_1": BASELINE["test_brier_cal"], "this_run": m["test_brier_cal"]},
+        {"metric": "train/test PR-AUC gap", "stage_1": BASELINE["train_pr_auc"] - BASELINE["test_pr_auc_raw"], "this_run": gap},
+    ])
+    cmp["delta"] = cmp.this_run - cmp.stage_1
+    block(cmp.round(6).to_string(index=False))
+    emit()
+    d_pr = m["test_pr_auc_raw"] - BASELINE["test_pr_auc_raw"]
+    if d_pr > 0.001:
+        emit(f"**The V block and identity columns improved test PR-AUC by "
+             f"{d_pr:+.4f}** ({BASELINE['test_pr_auc_raw']:.4f} -> "
+             f"{m['test_pr_auc_raw']:.4f}, "
+             f"{d_pr/BASELINE['test_pr_auc_raw']*100:+.1f}%).")
+    elif d_pr < -0.001:
+        emit(f"**The V block and identity columns did NOT improve test PR-AUC. "
+             f"It fell by {d_pr:+.4f}** ({BASELINE['test_pr_auc_raw']:.4f} -> "
+             f"{m['test_pr_auc_raw']:.4f}). Adding 379 columns made the model "
+             "worse on held-out data, not better.")
+    else:
+        emit(f"**The V block and identity columns made no material difference "
+             f"to test PR-AUC** ({BASELINE['test_pr_auc_raw']:.4f} -> "
+             f"{m['test_pr_auc_raw']:.4f}, change {d_pr:+.4f}).")
+    emit()
+    emit("Note the two runs use different training windows (day <120 then, "
+         "<110 now), so this compares the pipelines end to end, not the "
+         "feature block in isolation.")
+    emit()
+
     emit("### Top 25 features by gain")
     emit()
     block(imp.head(25).round(4).to_string(index=False))

@@ -91,6 +91,18 @@ No engineered feature exceeds 50% null.
 
 The prior-window features are null for the first transaction of each account, which is 217,850 of 590,540 rows (36.89%). That is the correct behaviour for a strictly backward-looking window, not a defect.
 
+### Null rate, passthrough blocks added in the refinement pass
+
+These are passthrough columns, not engineered features, so the 50% rule is reported separately. Identity columns are null for the 75.6% of transactions with no matching identity row, which is expected and is exactly why `has_identity` is itself a feature.
+
+```
+                           BLOCK  COLUMNS EXAMPLE_V1_NULL_PCT
+               V block (V1-V339)      339             47.2935
+identity (id_01-id_38, device_*)       40             75.5761
+```
+
+V block columns present: 339. Per-column V null rates were profiled in the source parquet during Part 1 of stage 1: 172 of 395 transaction columns sit in the 50-90% null band, which is inherent to the V block and unchanged by this pass.
+
 ### Identity coverage and fraud rate
 
 ```
@@ -164,11 +176,14 @@ All three accounts match. Row N's window features reflect rows 1..N-1 only. Note
 
 ### Time splits
 
+Four disjoint windows. Early stopping and calibration no longer share a window, so the isotonic map is fitted on data the model was not tuned against.
+
 ```
-      split            day_range   rows  fraud  fraud_rate  dev_vs_0.0350_pct
-      train        txn_day < 120 410601  14419    0.035117               0.36
-calibration 120 <= txn_day < 150  85303   2962    0.034723              -0.76
-       test       txn_day >= 150  94636   3282    0.034680              -0.89
+         split            day_range   rows  fraud  fraud_rate  dev_vs_0.0350_pct
+         train        txn_day < 110 380100  12992    0.034180              -2.31
+early stopping 110 <= txn_day < 130  62266   2543    0.040841              16.72
+   calibration 130 <= txn_day < 150  53538   1846    0.034480              -1.46
+          test       txn_day >= 150  94636   3282    0.034680              -0.89
 ```
 
 No split deviates more than 30% from the 0.0350 base rate.
@@ -177,81 +192,101 @@ Total across splits: 590,540 of 590,540 rows.
 
 ### Features
 
-Features used by the model: **58** (15 categorical, 43 numeric).
+Features used by the model: **437** (32 categorical, 405 numeric).
 
 Excluded by design: ['account_id', 'is_fraud', 'prev_transaction_dt', 'transaction_dt', 'transaction_id', 'txn_day']
 
 Identifier/time columns present in the feature list: none -> **PASS**
 
-Best iteration by average_precision on the calibration split: **444** of 3000 (early stopping patience 100).
+Best iteration by average_precision on the **early stopping** split (days 110-129): **421** of 3000, patience 100.
 
 ### Test metrics
 
 ```
-train_pr_auc        0.824296
-test_pr_auc_raw     0.500701
-test_pr_auc_cal     0.486468
-test_roc_auc_raw    0.893324
-test_roc_auc_cal    0.893244
-test_brier_raw      0.022893
-test_brier_cal      0.023070
+train_pr_auc        0.879783
+test_pr_auc_raw     0.508558
+test_pr_auc_cal     0.490119
+test_roc_auc_raw    0.886324
+test_roc_auc_cal    0.886009
+test_brier_raw      0.022956
+test_brier_cal      0.022980
 ```
 
-Train PR-AUC 0.8243 vs test PR-AUC 0.5007, gap +0.3236.
-Test PR-AUC 0.5007 is below the 0.85 suspicion threshold.
-**FLAG: train/test PR-AUC gap 0.3236 suggests overfitting.**
+Train PR-AUC 0.8798 vs test PR-AUC 0.5086, gap +0.3712.
+Test PR-AUC 0.5086 is below the 0.85 suspicion threshold.
+**FLAG: train/test PR-AUC gap 0.3712 suggests overfitting.**
 
-Brier degraded under calibration: 0.022893 -> 0.023070 (-0.77%).
+Brier degraded under calibration: 0.022956 -> 0.022980 (-0.11%).
 
-**FLAG: isotonic calibration did not improve the Brier score on test.** The isotonic map is fitted on days 120-149 and applied to days 150+, so any drift between those periods is baked into the map. The same split is also used for early stopping, so the model is already tuned to it. Both push the calibrator toward the calibration period rather than the test period. See the decile tables below: the raw top decile is near-perfect (0.2353 predicted vs 0.2355 actual) while isotonic overshoots it (0.2683 vs 0.2349). Calibration still helps the middle deciles, which is where the cost-optimal threshold falls.
+Stage 1, with early stopping and calibration sharing one window, went 0.022893 -> 0.023070 (a degradation). This run uses disjoint windows.
+
+**FLAG: isotonic calibration still did not improve the Brier score on test, even with disjoint windows.** Separating the windows was therefore not sufficient. The remaining cause is drift between the calibration period and the test period, not reuse of the tuning split.
+
+### Stage 1 vs this run, side by side
+
+```
+                  metric   stage_1   this_run      delta
+                features 58.000000 437.000000 379.000000
+            train PR-AUC  0.824296   0.879783   0.055487
+       test PR-AUC (raw)  0.500701   0.508558   0.007857
+test PR-AUC (calibrated)  0.486468   0.490119   0.003651
+      test ROC-AUC (raw)  0.893324   0.886324  -0.007000
+        test Brier (raw)  0.022893   0.022956   0.000063
+ test Brier (calibrated)  0.023070   0.022980  -0.000090
+   train/test PR-AUC gap  0.323595   0.371225   0.047630
+```
+
+**The V block and identity columns improved test PR-AUC by +0.0079** (0.5007 -> 0.5086, +1.6%).
+
+Note the two runs use different training windows (day <120 then, <110 now), so this compares the pipelines end to end, not the feature block in isolation.
 
 ### Top 25 features by gain
 
 ```
-               feature       gain  pct_of_total_gain
-                    c1 76709.1618            11.0550
-                   c14 56120.4465             8.0878
-                    c4 29397.2133             4.2366
-                   c13 28948.3646             4.1719
-                    d3 28594.9666             4.1210
-       transaction_amt 27501.1712             3.9633
-                    d2 27202.2362             3.9203
-         r_emaildomain 26385.4582             3.8026
-                   d15 22615.6342             3.2593
-                    c8 21232.5546             3.0599
-                   d10 21218.4871             3.0579
-         p_emaildomain 20143.6054             2.9030
-                    c7 19723.0345             2.8424
-        prior_amt_mean 17470.5823             2.5178
-                    c5 15346.4239             2.2117
-                    d4 15184.3389             2.1883
-                    c2 14955.7078             2.1554
-                    d8 14197.0907             2.0460
-                    d1 14063.0820             2.0267
-                   c11 13919.9306             2.0061
-         prior_amt_sum 11886.2348             1.7130
-                    c6 11042.1654             1.5913
-                 card6 10565.9442             1.5227
-                    m5 10066.4042             1.4507
-seconds_since_prev_txn  8977.9387             1.2939
+        feature       gain  pct_of_total_gain
+           v257 41998.0309             6.0543
+           v258 41303.0121             5.9541
+             c1 35300.7517             5.0888
+    device_info 33526.0268             4.8330
+            c13 26667.9166             3.8443
+            c14 26650.0655             3.8418
+           v294 21391.6356             3.0837
+  r_emaildomain 15935.9021             2.2973
+             d2 15704.8176             2.2639
+  p_emaildomain 15331.2679             2.2101
+transaction_amt 14710.6371             2.1206
+          id_31 14141.8335             2.0386
+            d15 11535.7103             1.6629
+           v189  8881.8374             1.2804
+ prior_amt_mean  8766.4907             1.2637
+            d10  8399.5411             1.2108
+          card6  8027.5098             1.1572
+             d1  7867.0181             1.1341
+             d4  7865.1058             1.1338
+            c11  7816.7037             1.1268
+             c8  7428.9533             1.0709
+          id_30  7062.9753             1.0182
+             c4  7041.5232             1.0151
+          id_33  6963.1964             1.0038
+           v308  6344.7704             0.9146
 ```
 
-No single feature dominates: the top feature `c1` carries 11.05% of total gain, below the 30% threshold.
+No single feature dominates: the top feature `v257` carries 6.05% of total gain, below the 30% threshold.
 
 ### Predicted probability distribution on test
 
 ```
 statistic      raw  calibrated
-      min 0.000048    0.000000
-      p25 0.002938    0.003032
-   median 0.006274    0.007081
-      p75 0.015675    0.019786
-      p95 0.113762    0.166667
-      max 0.998336    1.000000
-     mean 0.031530    0.037248
+      min 0.000047    0.000000
+      p25 0.002852    0.004682
+   median 0.005747    0.010193
+      p75 0.013277    0.026358
+      p95 0.090455    0.168901
+      max 0.999603    1.000000
+     mean 0.028235    0.038231
 ```
 
-Actual test fraud rate: 0.034680. Mean calibrated probability: 0.037248 (difference +0.002568). Mean raw probability: 0.031530 (difference -0.003150).
+Actual test fraud rate: 0.034680. Mean calibrated probability: 0.038231 (difference +0.003551). Mean raw probability: 0.028235 (difference -0.006445).
 
 ### Decile calibration, predicted vs actual
 
@@ -259,32 +294,32 @@ Actual test fraud rate: 0.034680. Mean calibrated probability: 0.037248 (differe
 
 ```
 decile    n  predicted   actual  abs_diff
-     1 9464   0.000988 0.003698  0.002710
-     2 9464   0.001989 0.002430  0.000441
-     3 9463   0.002942 0.003170  0.000228
-     4 9464   0.004044 0.004755  0.000711
-     5 9463   0.005424 0.006023  0.000599
-     6 9464   0.007383 0.008030  0.000648
-     7 9463   0.010408 0.016063  0.005655
-     8 9464   0.015967 0.023986  0.008019
-     9 9463   0.030816 0.043115  0.012300
-    10 9464   0.235331 0.235524  0.000193
+     1 9464   0.001054 0.003487  0.002433
+     2 9464   0.002016 0.004755  0.002739
+     3 9463   0.002857 0.005178  0.002321
+     4 9464   0.003840 0.005917  0.002077
+     5 9463   0.005037 0.006869  0.001832
+     6 9464   0.006637 0.008347  0.001710
+     7 9463   0.009047 0.012258  0.003211
+     8 9464   0.013501 0.021555  0.008055
+     9 9463   0.025327 0.040262  0.014935
+    10 9464   0.213028 0.238166  0.025138
 ```
 
 **after isotonic**
 
 ```
 decile    n  predicted   actual  abs_diff
-     1 9464   0.001630 0.003487  0.001857
-     2 9464   0.002862 0.003593  0.000731
-     3 9463   0.003256 0.002008  0.001248
-     4 9464   0.004663 0.004861  0.000197
-     5 9463   0.005550 0.006023  0.000474
-     6 9464   0.008967 0.008664  0.000302
-     7 9463   0.013750 0.015534  0.001784
-     8 9464   0.021574 0.023352  0.001778
-     9 9463   0.041882 0.044383  0.002501
-    10 9464   0.268336 0.234890  0.033446
+     1 9464   0.001786 0.003487  0.001701
+     2 9464   0.002851 0.004332  0.001481
+     3 9463   0.004322 0.005389  0.001067
+     4 9464   0.004682 0.005495  0.000813
+     5 9463   0.006429 0.008243  0.001814
+     6 9464   0.011693 0.007819  0.003874
+     7 9463   0.016557 0.011941  0.004616
+     8 9464   0.026238 0.021555  0.004682
+     9 9463   0.051526 0.040368  0.011158
+    10 9464   0.256220 0.238166  0.018054
 ```
 
 Reliability curve: `reports/calibration_curve.png`.
@@ -321,47 +356,91 @@ Cost model, applied per transaction:
 
 Swept 1,388 thresholds from 0.001 to 0.99.
 
-**Chosen threshold: 0.071000**
+**Chosen threshold: 0.079339**
 
 ```
             policy  threshold  total_cost_usd  vs_optimum_usd
-           optimum      0.071       309028.40           -0.00
-         naive 0.5      0.500       434126.66       125098.26
-approve everything        inf       577294.40       268266.00
-decline everything      0.000      1414894.91      1105866.51
+           optimum   0.079339       298573.68            0.00
+         naive 0.5   0.500000       445656.14       147082.46
+approve everything        inf       577294.40       278720.72
+decline everything   0.000000      1414894.91      1116321.23
 ```
 
 ### Sensitivity to the threshold
 
 ```
  threshold        label  total_cost_usd  delta_vs_optimum_usd  delta_pct
-    0.0568 optimum -20%       319691.66              10663.26      3.451
-    0.0710      optimum       309028.40                 -0.00     -0.000
-    0.0852 optimum +20%       310401.53               1373.13      0.444
+  0.063471 optimum -20%       317206.70              18633.02      6.241
+  0.079339      optimum       298573.68                  0.00      0.000
+  0.095207 optimum +20%       300662.57               2088.89      0.700
 ```
 
-Moving the threshold 20% in either direction changes total cost by at most 3.451%. The optimum is sharp, so the threshold needs care.
+Moving the threshold 20% in either direction changes total cost by at most 6.241%. The optimum is sharp, so the threshold needs care.
 
 ### Confusion matrices, raw counts
 
 ```
    policy  threshold   tp   fp   fn    tn  precision   recall  false_decline_rate  declined  approved
-  optimum      0.071 2146 6099 1136 85255   0.260279 0.653870            0.066762      8245     86391
-naive 0.5      0.500 1056  266 2226 91088   0.798790 0.321755            0.002912      1322     93314
+  optimum   0.079339 2213 6652 1069 84702   0.249633 0.674284            0.072816      8865     85771
+naive 0.5   0.500000 1127  388 2155 90966   0.743894 0.343388            0.004247      1515     93121
 ```
 
 ### Fraud dollars
 
 ```
                            metric         usd  pct_of_fraud_dollars
-total transaction dollars in test 12978560.94              2620.638
+total transaction dollars in test 12978560.92              2620.638
       total fraud dollars in test   495244.40               100.000
-  fraud dollars caught at optimum   319336.86                64.481
-      fraud dollars caught at 0.5   123196.04                24.876
+  fraud dollars caught at optimum   339843.70                68.621
+      fraud dollars caught at 0.5   111686.63                22.552
 ```
 
-Share of fraud dollars caught at the chosen threshold: **64.48%**
+Share of fraud dollars caught at the chosen threshold: **68.62%**
 Fraud dollars as a share of all test dollars: 3.82%
+
+### Reconciling the extremes
+
+Component arithmetic for the two boundary policies, so the cost function can be checked by hand at the extremes.
+
+**Decline everything** (threshold 0.0): FN = 0, TP = all 3,282 frauds, FP = all 91,354 legitimate.
+
+```
+lost margin   0.025 x $12,483,316.52   = $   312,082.91
+churn         0.05 x $200 x 91,354       = $   913,540.00
+review        $2 x 94,636 declines         = $   189,272.00
+fraud loss    every fraud declined            = $         0.00
+------------------------------------------------------
+TOTAL                                          = $ 1,414,894.91
+computed by cost_at(0.0)                       = $ 1,414,894.91
+```
+
+Margin plus churn alone is $1,225,622.91. The remaining $189,272.00 is the review term: declining everything means reviewing all 94,636 transactions, fraudulent and legitimate alike. That term is the difference between the two figures.
+
+**Approve everything** (threshold above 1): TP = FP = 0, FN = all 3,282 frauds.
+
+```
+fraud loss    $495,244.40 of goods            = $   495,244.40
+chargebacks   $25 x 3,282                  = $    82,050.00
+review        $2 x 0 declines                 = $         0.00
+------------------------------------------------------
+TOTAL                                          = $   577,294.40
+computed by cost_at(1.01)                      = $   577,294.40
+```
+
+### Stage 1 vs this run, decision layer
+
+```
+               metric       stage_1      this_run         delta
+     chosen threshold      0.071000      0.079339      0.008339
+total cost at optimum 309028.400000 298573.680000 -10454.720000
+    total cost at 0.5 434126.660000 445656.140000  11529.480000
+        saving vs 0.5 125098.260000 147082.460000  21984.200000
+saving vs approve-all 268266.000000 278720.720000  10454.720000
+   false decline rate      0.066762      0.072816      0.006054
+            precision      0.260279      0.249633     -0.010646
+               recall      0.653870      0.674284      0.020414
+ fraud dollars caught 319336.860000 339843.700000  20506.840000
+```
 
 Cost curve: `reports/cost_vs_threshold.png`.
 

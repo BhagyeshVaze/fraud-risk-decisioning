@@ -6,7 +6,8 @@
 ) }}
 
 -- One row per transaction, with backward-looking behavioural features per
--- constructed account.
+-- constructed account, plus full passthrough of the V block (V1-V339) and
+-- the identity block (id_01-id_38, DeviceType, DeviceInfo).
 --
 -- LEAKAGE CONTROL. Every window below uses:
 --     RANGE BETWEEN <bound> PRECEDING AND 1 PRECEDING
@@ -33,7 +34,13 @@ WITH base AS (
         k.account_id,
         k.account_key_tier,
         k.is_degraded_key,
-        i.transaction_id IS NOT NULL                      AS has_identity
+        i.transaction_id IS NOT NULL                      AS has_identity,
+
+        -- Identity passthrough. Explicit rather than i.* so transaction_id
+        -- does not collide with the transactions side.
+        {% for n in range(1, 39) %}i.id_{{ "%02d"|format(n) }},
+        {% endfor %}i.device_type,
+        i.device_info
     FROM {{ ref('stg_transactions') }} t
     INNER JOIN {{ ref('int_account_keys') }} k
         ON k.transaction_id = t.transaction_id
@@ -108,8 +115,18 @@ featured AS (
         {% endfor %}
         {% for i in range(1, 16) %}d{{ i }},
         {% endfor %}
-        {% for i in range(1, 10) %}m{{ i }}{{ "," if not loop.last }}
+        {% for i in range(1, 10) %}m{{ i }},
         {% endfor %}
+
+        -- Vesta's engineered block. 339 columns, passed through untouched.
+        {% for i in range(1, 340) %}v{{ i }},
+        {% endfor %}
+
+        -- Identity block. Null for the 75.6% of transactions with no
+        -- matching identity row, which is why has_identity is a feature.
+        {% for n in range(1, 39) %}id_{{ "%02d"|format(n) }},
+        {% endfor %}device_type,
+        device_info
 
     FROM base
 

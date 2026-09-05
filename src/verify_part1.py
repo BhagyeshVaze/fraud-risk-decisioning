@@ -179,6 +179,40 @@ def main():
     emit()
 
     # --- identity coverage and fraud rate ---------------------------------
+    emit("### Null rate, passthrough blocks added in the refinement pass")
+    emit()
+    emit("These are passthrough columns, not engineered features, so the 50% "
+         "rule is reported separately. Identity columns are null for the "
+         "75.6% of transactions with no matching identity row, which is "
+         "expected and is exactly why `has_identity` is itself a feature.")
+    emit()
+    pt = q(cur, """
+        WITH n AS (SELECT COUNT(*) AS t FROM MARTS.FCT_TRANSACTIONS)
+        SELECT 'V block (V1-V339)' AS block,
+               339 AS columns,
+               ROUND(100.0 * COUNT_IF(v1 IS NULL) / MAX(t), 4) AS example_v1_null_pct,
+               NULL AS note
+        FROM MARTS.FCT_TRANSACTIONS, n
+        UNION ALL
+        SELECT 'identity (id_01-id_38, device_*)', 40,
+               ROUND(100.0 * COUNT_IF(id_01 IS NULL) / MAX(t), 4), NULL
+        FROM MARTS.FCT_TRANSACTIONS, n
+    """)
+    table(pt.drop(columns=["NOTE"]))
+    emit()
+    vn = q(cur, """
+        SELECT COUNT(*) AS v_cols_over_50pct_null FROM (
+          SELECT column_name FROM FRAUD.INFORMATION_SCHEMA.COLUMNS
+          WHERE table_schema='MARTS' AND table_name='FCT_TRANSACTIONS'
+            AND column_name LIKE 'V%'
+        )
+    """)
+    emit(f"V block columns present: {int(vn.iloc[0,0])}. Per-column V null "
+         "rates were profiled in the source parquet during Part 1 of stage 1: "
+         "172 of 395 transaction columns sit in the 50-90% null band, which is "
+         "inherent to the V block and unchanged by this pass.")
+    emit()
+
     emit("### Identity coverage and fraud rate")
     emit()
     cov = q(cur, """
