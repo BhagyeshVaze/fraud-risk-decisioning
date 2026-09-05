@@ -6,8 +6,13 @@ Shared infrastructure settings for the Fraud Risk Decisioning System.
 
 | Setting | Value |
 | --- | --- |
-| S3 bucket | `fraud-risk-raw-bhagyesh-8471` |
-| Region | `us-east-1` |
+| S3 bucket | `fraud-risk-raw-bhagyesh-8471-ca` |
+| Region | `ca-central-1` |
+
+The bucket is in `ca-central-1` to match the region of the Snowflake account
+and avoid cross-region reads. Note that the AWS CLI default region is
+`us-east-1`, so pass `--region ca-central-1` explicitly when working with this
+bucket.
 
 The AWS account ID is deliberately not recorded here, because this repository
 is public. It is kept locally in `SETUP_NOTES.md`, which is untracked.
@@ -15,7 +20,7 @@ is public. It is kept locally in `SETUP_NOTES.md`, which is untracked.
 ## Bucket layout
 
 ```
-s3://fraud-risk-raw-bhagyesh-8471/
+s3://fraud-risk-raw-bhagyesh-8471-ca/
   raw/
     transactions/transactions.parquet
     identity/identity.parquet
