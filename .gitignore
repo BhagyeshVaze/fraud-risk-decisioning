@@ -1,0 +1,25 @@
+# Virtual environment
+.venv/
+
+# Data
+data/
+*.csv
+*.parquet
+*.pkl
+
+# Secrets and credentials
+.env
+.aws/
+kaggle.json
+profiles.yml
+
+# dbt
+target/
+dbt_packages/
+logs/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Python
+__pycache__/
