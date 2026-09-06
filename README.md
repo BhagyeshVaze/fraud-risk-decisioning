@@ -78,6 +78,11 @@ feature set changes. Cost differences are against the full 437 model, with a
 | Top 100 | 0.4902 | 0.3890 | 16.4s | $309,584 | +$11,011 | [+$1,715, +$20,682] | **yes** |
 | Top 50 | 0.4888 | 0.3548 | 11.7s | $321,245 | +$22,672 | [+$10,675, +$33,319] | **yes** |
 
+These figures were measured **before** D-normalisation and are kept as the
+record of that experiment. The 200-feature set it selected is still what
+ships, but the current model also normalises the D columns, and its reported
+figure is **0.4933**.
+
 Top 200 is cheaper on the point estimate but the difference is inside the noise
 band, so the honest claim is that it is **no worse** than the full set while
 using 54% fewer features and training 19% faster. That is why it ships. Cutting
@@ -144,6 +149,63 @@ wide. The top 100 frauds carry 25.1% of all fraud dollars in a test set of only
 3,282 frauds, so the total moves substantially on where a few large
 transactions fall. Treat any single improvement smaller than about $10,000 as
 unproven until it is confirmed across multiple test periods.
+
+### Why this PR-AUC is lower than published numbers
+
+The reported **0.4933** comes from a time-based split: train on days below 110,
+test on day 150 onward. Most published results on IEEE-CIS use a random split,
+which leaks future information on a dataset whose patterns drift.
+
+Measured rather than asserted. Identical features, identical hyperparameters,
+identical calibration, only the split rule changing. Full detail in
+[split_comparison.md](reports/split_comparison.md).
+
+| Run | Test n | PR-AUC | ROC-AUC | Brier |
+| --- | --- | --- | --- | --- |
+| **A. Time split (reported)** | 94,636 | **0.4933** | 0.8926 | 0.02364 |
+| **B. Random split, size-matched** | 94,637 | **0.8250** | 0.9628 | 0.01154 |
+| C. Random 80/20 | 118,108 | 0.8237 | 0.9631 | 0.01174 |
+
+Run B is the quoted comparison: it reproduces the time split's segment
+proportions exactly (64.4% train, 10.5% early stopping, 9.1% calibration,
+16.0% test), so the **only** difference is whether rows are assigned by date or
+at random.
+
+A random split inflates PR-AUC by **+0.3317, or 67.3%**, bootstrap 95% CI
+[+0.3113, +0.3519] over 1,000 resamples. It also halves the Brier score, so the
+leak flatters ranking and calibration together.
+
+The mechanism is account overlap: under the random split **67.4% of test
+accounts also appear in training**, against 31.0% under the time split, and
+none of the time-split overlaps are future transactions.
+
+### Logistic regression baseline
+
+Same time split, same 200 features, paired bootstrap on identical test rows.
+
+| Model | PR-AUC | ROC-AUC | Brier |
+| --- | --- | --- | --- |
+| Logistic regression | 0.1863 | 0.8279 | 0.03790 |
+| **LightGBM (shipped)** | **0.4933** | **0.8926** | **0.02364** |
+| Difference | **+0.3070** | +0.0647 | -0.0143 |
+
+95% CI on the PR-AUC difference [+0.2939, +0.3201], which excludes zero.
+Gradient boosting is worth 2.6x the linear baseline, so the complexity is
+earning its place. Logistic regression additionally required imputation,
+scaling and explicit categorical encoding that LightGBM does not.
+
+### The comparison worth noticing
+
+```
+leakage from a random split adds   +0.3317 PR-AUC
+logistic -> gradient boosting adds +0.3070 PR-AUC
+```
+
+**Switching to a random split buys more apparent performance than the entire
+jump from logistic regression to a tuned gradient boosting model.** One of
+those is a modelling result; the other is measurement error. A published 0.80
+on a random split and the 0.4933 reported here are not evidence of different
+model quality.
 
 ## Architecture
 
