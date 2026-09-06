@@ -1,16 +1,16 @@
 # Stage 2, observational half
 
-Implements section 10 of `reports/stage2_preregistration.md`, committed at `e5bb4f5`. Simulates a non-random rollout steered by account risk, then recovers the effect the way a post-hoc analyst would and compares against the truth.
+Implements section 10 of the pre-registration. Simulates a non-random rollout steered by account risk, then recovers the effect the way a post-hoc analyst would.
 
 ## The two targets, and why both are needed
 
-Because this is a replay, both potential outcomes are known for every account, so the **exact ATE is computable: $-3.2499 per account** ($-155,129 scaled). The randomised arm estimated $-1.7745 (SE $0.9469), one noisy draw at that quantity.
+Both potential outcomes are known for every account, so the **exact ATE is computable: $-3.2499 per account** ($-155,129 scaled). The randomised arm estimated $-1.7745 (SE $0.9469), one noisy draw at that quantity.
 
-Propensity matching estimates the effect **on the treated** (ATT). The effect here is strongly heterogeneous: $0.00 in risk quintiles 1 to 3 and -$16.29 in quintile 5. Under a rollout steered by risk the treated group is not a random sample, so the ATT genuinely differs from the ATE. Judging an ATT estimate against the ATE would charge estimand mismatch to confounding. Both targets are therefore reported for every scenario, and the ATT is the one PSM is responsible for.
+Matching estimates the effect **on the treated**. The effect is strongly heterogeneous, so under a risk-steered rollout the ATT differs from the ATE by construction. Judging an ATT estimate against the ATE would charge estimand mismatch to confounding. Both are reported.
 
 ## Results by scenario
 
-Exact ATE across all accounts: **$-3.2499 per account**. Negative favours the challenger.
+Exact ATE across all accounts: **$-3.2499 per account**.
 
 **beta +0.5 (risk-seeking)**, true ATT $-5.3830
 
@@ -79,7 +79,7 @@ beta
  3.0                        12.7987                       7.9055           14.5960
 ```
 
-Bias against the ATT, in dollars per account. The oracle column is the control: it uses the same matching machinery plus the one variable that actually drove assignment.
+Bias against the ATT, dollars per account. The oracle column is the control: the same machinery plus the one variable that drove assignment.
 
 ## Matching diagnostics
 
@@ -101,8 +101,6 @@ beta +3.0 (risk-seeking)   oracle            22629             8707             
 
 ## Rosenbaum sensitivity, PSM on observed covariates
 
-How large an unmeasured confounder, expressed as an odds ratio on treatment assignment, would be needed before the matched-pair conclusion could be overturned.
-
 ```
                 scenario gamma_to_overturn  matched_pairs  pct_pairs_exactly_zero  pct_of_nonzero_pairs_negative  pct_of_total_abs_diff_in_top_1pct  mean_pair_diff  median_pair_diff
 beta +0.5 (risk-seeking)               1.0          23866                    86.5                           15.8                               62.4         -1.3822               0.0
@@ -113,9 +111,7 @@ beta +3.0 (risk-seeking)               1.0          23907                    83.
  beta -3.0 (risk-averse)              >6.0          23758                    95.0                           69.5                               78.8         -5.9158               0.0
 ```
 
-**The Rosenbaum bounds are uninformative here, and the reason is worth stating rather than hiding.** Around 91% of matched pairs have an outcome difference of exactly zero, because most accounts are never declined under either policy. Of the pairs that do differ, a minority are negative, while the top 1% of absolute differences carries roughly two thirds of the total mass. A signed-rank statistic counts pairs; this effect lives entirely in the size of a few of them. So the rank test reports non-significance in scenarios where the mean difference is large and its bootstrap interval excludes zero.
-
-This is a limitation of rank-based sensitivity analysis on a zero-inflated, tail-dominated outcome, not evidence about confounding. Reported because the pre-registration required Rosenbaum sensitivity, and a required diagnostic that turns out to be inapplicable should be shown to be inapplicable rather than quietly dropped.
+**The Rosenbaum bounds are uninformative here.** 83-95% of matched pairs differ by exactly zero, and the top 1% of absolute differences carries over half the mass. A signed-rank statistic counts pairs; this effect lives in the size of a few. Reported as inapplicable rather than dropped, since the pre-registration required it.
 
 Chart: `reports/stage2_observational.png`.
 

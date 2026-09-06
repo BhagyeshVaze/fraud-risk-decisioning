@@ -2,7 +2,7 @@
 
 Executes `reports/stage2_preregistration.md`, committed at `e5bb4f5` before this code existed. Champion 0.5000, challenger 0.1160, assignment by md5 hash with salt `stage2-v1`.
 
-Registered up front: the direction of this result is not in doubt. Stage 1 measured the contrast at $155,129. The purpose here is the machinery and the benchmark for the observational half.
+Registered up front: the direction is not in doubt. The purpose is the machinery and the benchmark for the observational half.
 
 ## SRM check
 
@@ -17,7 +17,7 @@ halt threshold       p < 0.001
 verdict              PASS
 ```
 
-Transaction counts, reported descriptively and not tested, since cluster sizes vary: challenger 47,740, champion 46,896 (0.5045 share).
+Transaction counts, descriptive only since cluster sizes vary: challenger 47,740, champion 46,896.
 
 ## Primary: mean cost per account
 
@@ -33,7 +33,7 @@ p (two-sided)     6.092e-02
 95% CI (BCa)      [$-3.7550, $-0.0856] per account
 ```
 
-**Normal and BCa intervals disagree.** Normal [-3.6304, +0.0813] includes zero; BCa [-3.7550, -0.0856] excludes zero. The pre-registration names the normal-theory interval as primary and the bootstrap as a cross-check, so **the normal interval governs the ship decision**. Switching to whichever interval gives the preferred answer is the exact failure pre-registration exists to prevent. The disagreement is driven by the heavy right tail of per-account cost and is reported, not resolved.
+**Normal and BCa intervals disagree.** Normal [-3.6304, +0.0813] includes zero; BCa [-3.7550, -0.0856] excludes zero. The pre-registration names the normal interval as primary, so **it governs the ship decision**. Switching to whichever interval gives the preferred answer is what pre-registration exists to prevent.
 
 ## CUPED, as multivariate regression adjustment
 
@@ -41,14 +41,14 @@ p (two-sided)     6.092e-02
 unadjusted  effect $  -1.7745   SE $0.9469
 adjusted    effect $  -1.9331   SE $0.9306
 variance reduction     3.40%   (registered expectation 4.9%)
-adjusted 95% CI    [$-3.7572, $-0.1091]
 ```
 
-Realised variance reduction of 3.40% against a registered expectation of 4.9%. Pre-period coverage is 31.6%, which is the binding constraint. **This is a null result for CUPED on this data**, registered as a likely outcome in advance and reported as such.
+Realised reduction 3.40% against a registered 4.9%. Pre-period coverage is 31.6%, the binding constraint. **A null result for CUPED on this data**, registered as likely in advance.
 
 ## Guardrail: false decline rate against the 8.0% ceiling
 
 **challenger** threshold 0.116
+
 ```
 false decline rate   6.3615%
 cluster-robust SE    0.2936pp   (clusters = 23,143 accounts)
@@ -95,7 +95,7 @@ Registered to lead the recommendation ahead of the average treatment effect.
 
 ## Targeted application follow-up
 
-Applying the challenger only above a risk cutoff, champion below. Computed as a paired counterfactual across all accounts, since both outcomes are known for every account.
+Challenger only above a risk cutoff, champion below. A paired counterfactual, since both outcomes are known for every account.
 
 ```
  risk_cutoff  accounts_on_challenger  pct_accounts  total_cost  legit_declined  false_decline_rate_pct  fraud_dollars_caught  vs_challenger_everywhere
@@ -111,22 +111,22 @@ Applying the challenger only above a risk cutoff, champion below. Computed as a 
        1.010                       0          0.00    446463.0             323                   0.354              113617.0                  155129.0
 ```
 
-Cheapest targeting cutoff: **0.02**, applying the challenger to 21.86% of accounts, total cost $291,260 against $291,334 for uniform application (difference $-74).
+Cheapest cutoff: **0.02**, challenger on 21.86% of accounts, $291,260 against $291,334 uniform.
 
-**Targeting buys almost nothing at the cost-optimal cutoff.** At 0.02 it declines 5,955 legitimate transactions against 5,960 for uniform application, a 0.1% reduction, and catches identical fraud dollars. The reason is mechanical: accounts below 0.02 mean risk almost never cross a 0.116 decline threshold anyway, so excluding them changes almost no decisions. The registered expectation that targeting would dominate uniform application is **not supported**.
+**Targeting buys almost nothing at the cost-optimal cutoff.** It declines 5,955 legitimate transactions against 5,960, a 0.1% reduction, catching identical fraud dollars. Accounts below 0.02 mean risk rarely cross a 0.116 threshold anyway. The registered expectation that targeting would dominate is **not supported**.
 
-There is a real trade further up the curve, but it costs money. At a 0.12 cutoff, false declines fall to 3,939 (4.312%), a 34% reduction, for $+2,887 of additional cost and $-31,690 less fraud caught. Whether that is worth it depends entirely on the churn assumption, which section 6 of the cost sensitivity report shows is the least reliable constant in the model.
+There is a real trade higher up, but it costs money. At 0.12, false declines fall to 3,939 (34% lower) for $+2,887 of cost and $-31,690 less fraud caught.
 
 ## Paired counterfactual benchmark
 
-Available only because this is a replay. Reported as an efficiency benchmark and as a bug detector: a material disagreement with the randomised estimate would indicate a fault in assignment or analysis.
+Available only because this is a replay. An efficiency benchmark and a bug detector: material disagreement would indicate a fault in assignment or analysis.
 
 ```
 paired effect      $-3.2499 per account
 paired SE          $0.4690
 paired 95% CI      [$-4.1691, $-2.3306]
 randomised effect  $-1.7745   SE $0.9469
-efficiency ratio   2.02x   (randomised SE / paired SE)
+efficiency ratio   2.02x
 agreement          consistent
 ```
 

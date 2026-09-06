@@ -82,5 +82,5 @@ Cheapest variant on the point estimate: **top 200** at $296,570.28 against $298,
 
 The saving is **not** significant (CI [$-9,817.02, $5,527.79] spans zero). It is adopted anyway on the parsimony rule: it is no worse on cost, uses far fewer features (200 against 437), and trains in 29.0s against 35.9s. A simpler model that is statistically indistinguishable is the better model to operate.
 
-Written to `models/selected_features.json`. `train_model.py` reads that file when present and falls back to all features otherwise.
+Written to `models/selected_features.json`. `src/model.py train` reads that file when present and falls back to all features otherwise.
 

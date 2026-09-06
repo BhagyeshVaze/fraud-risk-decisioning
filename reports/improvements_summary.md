@@ -8,7 +8,7 @@ hypothesis is as informative as an accepted one.
 
 ### 1. Cost assumption sensitivity: SHIPPED
 
-`src/cost_sensitivity.py`, `reports/cost_sensitivity.md`.
+`src/experiments.py cost`, `reports/cost_sensitivity.md`.
 
 The headline rested on five invented constants. Churn probability and lifetime
 value enter only through their product, the cost of one false decline, which
@@ -29,7 +29,7 @@ is not. Both statements are now in the README.
 
 ### 2. Walk-forward evaluation harness: SHIPPED
 
-`src/walkforward.py`.
+`src/core.py`, the walk-forward harness.
 
 Replaces a single 32-day test window with four non-overlapping 16-day windows
 spanning days 118-181, each with its own train, early-stopping and calibration
@@ -45,7 +45,7 @@ This harness produced every comparison below.
 
 ### 3. Better account proxy: REJECTED
 
-`src/exp_account_proxy.py`, `reports/proxy_candidates.md`.
+`src/experiments.py proxy`, `reports/proxy_candidates.md`.
 
 Six candidate keys, four folds each.
 

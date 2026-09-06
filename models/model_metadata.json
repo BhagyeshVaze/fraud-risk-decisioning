@@ -225,6 +225,7 @@
   ],
   "splits": {
     "train_max_day": 110,
+    "es_max_day": 130,
     "cal_max_day": 150
   },
   "metrics": {

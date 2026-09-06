@@ -235,7 +235,7 @@ DeviceType, DeviceInfo). 437 are eligible for the model; `transaction_id`,
 `account_id`, `txn_day`, `transaction_dt`, `prev_transaction_dt` and the label
 are excluded. **The shipped model uses the top 200 of those 437 by gain**,
 listed in `models/selected_features.json` and produced by
-`src/prune_features.py`. Delete that file to fall back to all 437.
+`python src/experiments.py prune`. Delete that file to fall back to all 437.
 
 Interactive lineage is in [reports/dbt_docs/index.html](reports/dbt_docs/index.html),
 exported so it outlives the Snowflake trial. 17 dbt tests pass, including an
@@ -325,14 +325,14 @@ so the cost function can be checked by hand.
 ## How to reproduce
 
 Requires Python 3.10 or later. Credentials go in `.env` at the repo root, which
-is gitignored; see the variable names in `src/load_to_snowflake.py`.
+is gitignored; see the variable names in `src/core.py`.
 
 ```bash
 python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
 ```
 
 ```bash
-python src/prepare_data.py && python src/load_to_snowflake.py
+python src/pipeline.py prepare && python src/pipeline.py sql && python src/pipeline.py load
 ```
 
 ```bash
@@ -340,15 +340,33 @@ cd fraud_dbt && set -a && source ../.env && set +a && dbt build && dbt docs gene
 ```
 
 ```bash
-python src/verify_part1.py && python src/train_model.py && python src/decision_layer.py
+python src/model.py all
 ```
 
 Experiments, all offline against the cached parquet and none requiring
 Snowflake:
 
 ```bash
-python src/cost_sensitivity.py && python src/exp_account_proxy.py && python src/exp_model_improvements.py
+python src/experiments.py cost
 ```
+
+Also accepts `proxy`, `prune`, `improve` and `split`. Stage 2:
+
+```bash
+python src/stage2.py randomized && python src/stage2.py observational
+```
+
+### Code layout
+
+Five modules, 2,402 lines.
+
+| Module | Contents |
+| --- | --- |
+| `core.py` | Cost model, feature engine, walk-forward harness, bootstrap, reporting |
+| `pipeline.py` | `prepare` / `sql` / `load`: raw CSV to parquet to Snowflake |
+| `model.py` | `verify` / `train` / `decide` / `all`: the production path |
+| `experiments.py` | `cost` / `proxy` / `prune` / `improve` / `split` |
+| `stage2.py` | `randomized` / `observational` |
 
 The model stage reads `data/parquet/fct_transactions.parquet` if it exists and
 only queries Snowflake otherwise, so **steps 2 and 3 can be skipped entirely
