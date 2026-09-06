@@ -1,384 +1,447 @@
-# Stage 2 design spec: counterfactual replay experiment
+# Stage 2 design spec: replay experiment and observational comparison
 
-**Status: draft for review. No implementation until this is signed off.**
+**Status: draft for review. No implementation until sign-off.**
 
-Every number in this document was computed from
-`data/parquet/fct_transactions.parquet` and the stage 1 calibrated
-probabilities. Nothing here is a placeholder.
+Every figure below was computed from the shipped D-normalised model and the
+cached replay data. Nothing is a placeholder or a textbook default.
 
----
-
-## 0. Three things I need decided before I build
-
-The design as briefed has a power problem, and two of the requested techniques
-do not earn their place on this data. Details are in sections 6 and 7; the
-decisions are:
-
-1. **The replay window is too short.** On days 150-181 the headline contrast
-   has **69.9% power** and an MDE of $163,114 against a true effect of
-   $144,514. The fix is to retrain with earlier split boundaries so the replay
-   window starts at day 130, which gives 84.4% power. That costs a retrain and
-   makes stage 2 numbers non-comparable to stage 1. My recommendation is to do
-   it.
-2. **CUPED buys almost nothing here (4.3% variance reduction).** I would still
-   implement it, because a null result honestly reported is a legitimate
-   finding, but it should not be presented as a variance-reduction win.
-3. **The per-transaction rule cannot be an evaluated arm.** That contrast has
-   **6.6% power**. Including it as a confirmatory arm would be
-   pre-registering a coin flip. It should be exploratory only, or dropped.
+Supersedes the earlier draft, which was written against the pre-normalisation
+model and included sequential testing.
 
 ---
 
-## 1. What this is
+## 0. Read this first: five things that need a decision
 
-A counterfactual replay on a frozen dataset. Labels are known, so for any
-policy we can compute exactly what it would have cost on real outcomes. No
-outcomes are simulated or imputed. This is off-policy evaluation, not a live
-experiment, and the README will say so.
-
-What replay **can** establish: whether the cost difference between policies is
-distinguishable from sampling noise, and how large it is with an interval.
-
-What replay **cannot** establish: churn behaviour after a decline, fraudster
-retry behaviour, customer support load, or any response to being declined.
-Those are assumed by the cost model, not measured. The $10 per false decline
-churn term remains an assumption in stage 2 exactly as it was in stage 1.
+1. **"Champion = current threshold" leaves no viable challenger.** Against
+   0.1160, every candidate policy has 5% to 32% power. The only adequately
+   powered contrast is against the naive 0.5 rule. Section 3 proposes
+   reframing champion as the pre-model incumbent. Without that, the experiment
+   cannot conclude anything.
+2. **The requested CUPED covariate is the weakest one available.** Pre-period
+   account value gives **0.09%** variance reduction. Pre-period fraud count
+   gives 4.6%. Neither is material, and the reason is that only 31.6% of
+   replay accounts exist in the pre-period at all.
+3. **A non-inferiority guardrail on false declines will fail by construction.**
+   The challenger declines 6.52% of legitimate transactions against the
+   champion's 0.35%, a deliberate +6.17pp. Non-inferiority is the wrong test
+   shape. It needs to be an absolute ceiling.
+4. **Two of the four pre-registered subgroups are underpowered** at 15.5% and
+   14.5%. They can be registered as descriptive, but not as tests.
+5. **The treatment effect is entirely concentrated in the top risk quintile.**
+   Quintiles 1 to 3 have an effect of exactly zero. This makes the average
+   treatment effect a poor summary and it is the single most important fact
+   for the observational design.
 
 ---
 
-## 2. Unit of randomization
+## 1. Randomisation unit and mechanism
 
-**`account_id`**, the constructed proxy from `int_account_keys`.
+**Unit: `account_id`**, the constructed proxy from `int_account_keys`.
 
-Rationale, as briefed: fraud rings share cards and devices, so a transaction
-belonging to a ring is not independent of its siblings. Transaction-level
-assignment would place related transactions in different arms, letting
-treatment leak across the network and violating SUTVA.
+Justification is dependence, not identity: fraud rings share cards and devices,
+so transactions within a constructed account are not independent. Measured
+ICC of transaction-level cost within account is 0.582, design effect 1.571.
+Randomising transactions would understate standard errors by about 25%.
 
-The proxy is imperfect. That does not undermine its use as a randomization
-unit: assignment only needs to be *coarser than* the dependence structure, not
-correct. Where the proxy over-splits a real cardholder, we get a conservative
-test (some correlated units land in different arms). Where it over-merges, we
-lose a little precision. Both are documented.
+The proxy is imperfect and documented as such. For randomisation that is
+tolerable: assignment only needs to be coarser than the dependence structure.
+Where it over-splits a true cardholder the test becomes conservative; where it
+over-merges we lose precision. Neither biases the estimate.
 
-Measured cluster structure on days 150-181:
+Replay window structure, days 150-181:
 
 | Property | Value |
 | --- | --- |
 | Transactions | 94,636 |
-| Clusters (accounts) | 47,734 |
-| Mean cluster size | 1.983 |
-| Median cluster size | 1 |
-| p95 / max cluster size | 5 / 1,400 |
-| Singleton clusters | 30,081 (63.0%) |
-| Transactions in multi-transaction clusters | 68.2% |
-| **ICC of transaction-level cost within account** | **0.582** |
-| **Design effect** `1 + (m0-1) x ICC` | **1.571** |
+| Accounts (clusters) | 47,734 |
+| Mean / median / p95 / max cluster size | 1.983 / 1 / 5 / 1,400 |
+| ICC of cost within account | 0.582 |
 
-The ICC of 0.582 is high and vindicates clustering: transactions within a
-constructed account are strongly correlated in cost. Transaction-level
-randomization would understate standard errors by roughly the square root of
-the design effect, about 25%.
-
-**Assignment mechanism.** Deterministic and auditable:
-`u = md5(f"{SALT}:{account_id}").int / 2**128`, arm by fixed cutpoints on `u`.
-`SALT` is fixed in the pre-registration. Deterministic hashing means assignment
-is reproducible, independent of row order, and re-derivable by a reviewer
-without stored state.
+**Mechanism.** Deterministic hash, not a random number generator:
+`u = md5(f"{SALT}:{account_id}").int / 2**128`, assign to challenger if
+`u < 0.5`. `SALT` is fixed in the pre-registration. This is reproducible,
+independent of row order, requires no stored assignment table, and a reviewer
+can re-derive every assignment from the account id alone.
 
 ---
 
-## 3. Arms
+## 2. Timeline and pre-period
 
-| Arm | Policy | Allocation |
+| Window | Days | Purpose |
 | --- | --- | --- |
-| **A. Control** | Fixed threshold 0.50, the naive incumbent | 50% |
-| **B. Treatment** | Cost-optimal global threshold from stage 1 | 50% |
+| Model training | < 110 | frozen before anything below |
+| Early stopping | 110-129 | frozen |
+| Calibration and threshold selection | 130-149 | champion and challenger thresholds fixed here |
+| **Pre-period** | **110-149** | CUPED covariate, subgroup definitions, PSM covariates |
+| **Replay** | **150-181** | the experiment |
 
-Two arms, not three. The stage 1 threshold is refit on the training data only
-and then frozen before assignment; it is not re-optimized inside the replay
-window, which would be optimizing on the evaluation set.
+The pre-period deliberately overlaps the model's training tail. That is safe
+for covariate construction, since covariates are account descriptions rather
+than model outputs, but it means pre-period fraud counts are labels the model
+already saw. Registered as a known limitation.
 
-**Excluded as a confirmatory arm: the per-transaction expected-cost rule.**
-Its contrast against B has a true effect of $11,199 against an MDE of $84,759,
-giving **6.6% power**. Pre-registering it would guarantee an inconclusive
-result. It will be reported as a pre-specified *exploratory* comparison with
-its interval, explicitly labelled underpowered and not part of the ship
-decision.
-
----
-
-## 4. Timeline and replay window
-
-Sequential analysis with five looks at equal information fractions.
-
-| Look | Replay day | Information fraction |
-| --- | --- | --- |
-| 1 | 156 | 0.20 |
-| 2 | 163 | 0.40 |
-| 3 | 169 | 0.60 |
-| 4 | 175 | 0.80 |
-| 5 (final) | 181 | 1.00 |
-
-A replay has no real cost to waiting, so interim looks are methodological
-practice rather than operational necessity. The spec states this rather than
-pretending the looks buy speed.
-
-**Window options.** The replay must start after the model's calibration window
-or the arms are evaluated on data the model saw.
-
-| Replay window | Days | Transactions | Accounts | MDE (total) | Power |
-| --- | --- | --- | --- | --- | --- |
-| day >= 150 (as briefed) | 32 | 94,636 | 47,734 | $163,113 | **69.9%** |
-| day >= 140 | 42 | 121,163 | 58,291 | $180,250 | 78.3% |
-| **day >= 130 (recommended)** | 52 | 148,174 | 68,399 | $195,254 | **84.4%** |
-| day >= 120 | 62 | 179,939 | 79,519 | $210,528 | 89.3% |
-
-Windows before day 150 require retraining with earlier train, early-stopping
-and calibration boundaries. Recommendation is **day >= 130**: train `< 90`,
-early stopping `90-109`, calibration `110-129`, replay `130-181`. That clears
-80% power with margin and keeps 90 days of training data.
+**Pre-period coverage is 31.6%.** Only 15,106 of 47,734 replay accounts have
+any activity in days 110-149. This single number is why CUPED underperforms
+and why the propensity model in section 8 has so little to work with. It is
+the most consequential weakness in the design.
 
 ---
 
-## 5. Metric hierarchy
+## 3. Arms, and how the challenger threshold is chosen
 
-**Primary (one, pre-registered, drives the ship decision)**
+**Thresholds are chosen on the calibration window (days 130-149) and frozen
+before assignment.** Neither is optimised on the replay window. This is the
+protocol adopted in the improvement pass: sweep on cross-fitted out-of-fold
+calibration probabilities, then apply. Re-optimising inside the replay window
+would test a policy fitted to its own evaluation data.
 
-- **Mean total modelled cost per account**, in dollars, over the replay window.
-  Per-transaction cost is defined exactly as in stage 1: fraud approved costs
-  amount + $25; legitimate declined costs 2.5% of amount + $10 churn-weighted
-  LTV + $2 review; fraud declined costs $2; legitimate approved costs $0.
-  Summed to the account, which is the randomization unit.
+### The power problem with "champion = current threshold"
 
-**Secondary (reported with intervals, do not drive the decision)**
+Measured effects against champion 0.1160, on 47,734 accounts with a
+per-account cost standard deviation of $66.75 and SE of $0.6110:
 
-- Fraud dollars caught, and as a share of fraud dollars present
-- Recall and precision at the arm's operating threshold
-- Count and rate of declined transactions
-- Mean cost per transaction (sanity cross-check against the primary)
+| Candidate challenger | Total effect | Per account | Power |
+| --- | --- | --- | --- |
+| Per-transaction expected-cost rule | +$9,535 | +$0.200 | **5.1%** |
+| Threshold 0.080 | +$16,659 | +$0.349 | 8.2% |
+| Threshold 0.160 | +$18,930 | +$0.397 | 9.5% |
+| Threshold 0.050 | +$35,202 | +$0.738 | 22.6% |
+| Threshold 0.250 | +$43,578 | +$0.913 | 32.1% |
+| Naive 0.500 | +$155,129 | +$3.250 | **100%** |
 
-**Guardrail (pre-registered, can veto a ship)**
+Nothing near the current threshold is detectable. Reaching 80% power on the
+0.250 contrast would need roughly 168,000 accounts; the entire 182-day dataset
+contains 217,850, and only about 90,000 are reachable without retraining.
+Extending the window does not rescue these.
 
-- **False decline rate**, meaning legitimate transactions declined divided by
-  legitimate transactions.
+### Proposed arms
 
-Important: the treatment **raises** false declines roughly 14.6-fold by design,
-from 0.429% to 6.277%. A "no worse than control" guardrail would fail on
-purpose and is meaningless here. The guardrail must be an **absolute ceiling
-agreed in advance by whoever owns the customer relationship**, tested one-sided
-against the ceiling, not against control.
+| Arm | Policy | Threshold | Allocation |
+| --- | --- | --- | --- |
+| **Champion** | incumbent fixed rule, pre-model | 0.5000 | 50% |
+| **Challenger** | model-optimised, cost-swept on days 130-149 | 0.1160 | 50% |
 
-Placeholder pending that decision: ceiling of **8.0%**, tested as
-`H0: FDR >= 8.0%` versus `H1: FDR < 8.0%` at α = 0.05 one-sided. Measured
-precision on this window is tight (SE 0.080pp), so the guardrail is
-well-powered whatever ceiling is chosen. **This number is a business input, not
-a statistical one, and I should not be the one to pick it.**
+This reframes champion as the **pre-model incumbent** rather than the currently
+shipped threshold. The business question becomes "should the fixed rule be
+replaced by the model-optimised threshold", which is the decision stage 1
+actually recommends, and it is the only version of this experiment that can
+reach a conclusion.
+
+I am flagging honestly that the outcome is not in doubt: stage 1 already
+measured this contrast at $155,129. The value of stage 2 is the analysis
+machinery and the observational comparison, not the answer. If you want a
+genuinely uncertain contrast, the honest options are to accept 30% power on the
+0.250 challenger, or to abandon the randomised framing and use the paired
+counterfactual estimator, which is 2.6x more efficient.
 
 ---
 
-## 6. Power and MDE
+## 4. Metric hierarchy
 
-Two-arm cluster-randomized, equal allocation, unit of analysis = account.
-`SE(difference in means) = 2 x sd / sqrt(N)`.
+**Primary, one metric, drives the recommendation**
 
-Measured per-account cost under control: mean $9.240, **sd $133.242**, max
-$11,270, skew 33.3, kurtosis 1,727.
+- Mean total modelled cost per account over the replay window, in dollars.
+  Per-transaction cost is the stage 1 function: fraud approved costs amount
+  plus $25; legitimate declined costs 2.5% of amount plus $10 churn-weighted
+  LTV plus $2 review; fraud declined costs $2; legitimate approved costs $0.
+  Summed to the account, which is the randomisation unit.
 
-| Contrast | True effect / account | SE | MDE @80% | Power |
+**Secondary, reported with intervals, do not drive the decision**
+
+- Fraud dollars caught and share of fraud dollars present
+- Recall, precision
+- Declined transaction count and rate
+- Mean cost per transaction, as a cross-check on the primary
+
+**Guardrail**
+
+- False decline rate: legitimate transactions declined over legitimate
+  transactions.
+
+**The guardrail cannot be a non-inferiority test.** Measured rates are 0.354%
+for the champion and 6.524% for the challenger, a deliberate 18-fold increase
+that is the mechanism by which the challenger catches more fraud. A
+non-inferiority test against the champion fails at any sensible margin, and
+would fail on a policy we believe is correct.
+
+The guardrail must be an **absolute ceiling** set by whoever owns the customer
+relationship, tested one-sided as `H0: FDR >= ceiling` against
+`H1: FDR < ceiling`. Placeholder **8.0%**, which the challenger clears with
+measured SE of 0.08pp. **This is a business input and I should not be choosing
+it.**
+
+---
+
+## 5. Power calculation
+
+Two arms, equal allocation, unit of analysis equals unit of randomisation, so
+`SE(difference) = 2 x sd / sqrt(N)`.
+
+**Assumptions, stated because they drive the answer**
+
+1. N = 47,734 accounts, 50/50, realised split within SRM tolerance.
+2. Per-account cost standard deviation of **$128.5**, measured under the
+   champion arm. Using the champion is conservative: under the challenger the
+   sd is $66.75, because blocking large frauds removes the heavy tail. Power
+   computed on the pooled or challenger sd would look better; the champion
+   figure is the pessimistic one.
+3. Two-sided α = 0.05, no multiplicity adjustment on the primary.
+4. Normal approximation for the difference in means.
+5. Effect size taken as the measured replay effect of -$3.2499 per account.
+
+**Result**
+
+| Quantity | Value |
+| --- | --- |
+| SE of the difference | $1.1825 per account |
+| MDE at 80% power | $3.3128 per account, **$158,132 total** |
+| True effect | -$3.2499 per account, -$155,129 total |
+| **Power at the true effect** | **78.5%** |
+
+**The design is marginally underpowered.** The MDE of $158,132 slightly exceeds
+the effect of $155,129, so at 80% this contrast is just out of reach and lands
+at 78.5%. It will usually reject, but roughly one run in five would not. This
+should be stated in the pre-registration rather than discovered afterwards.
+
+**On the heavy tail.** Per-account cost is severely skewed. At n = 23,867 per
+arm the sampling distribution of the mean is nonetheless close to normal
+(skew of the mean around 0.2), so normal intervals are defensible. A BCa
+bootstrap runs alongside and any material disagreement gets reported.
+
+---
+
+## 6. Variance reduction, and why CUPED barely helps
+
+CUPED adjusts `Y* = Y - θ(X - E[X])` with `θ = Cov(Y,X)/Var(X)`. Measured on
+the actual data:
+
+| Covariate | Pre-period | Correlation | Variance reduction | MDE after |
 | --- | --- | --- | --- | --- |
-| **B vs A (primary)** | -$3.0275 | $1.2197 | $3.4171 | **69.9%** |
-| Per-txn rule vs B (exploratory) | -$0.2346 | $0.6338 | $1.7757 | **6.6%** |
+| **Account value (requested)** | 40 days | **+0.0298** | **0.09%** | $158,061 |
+| Transaction count | 40 days | +0.0168 | 0.03% | $158,109 |
+| Mean ticket | 40 days | +0.0120 | 0.01% | $158,120 |
+| Fraud count | 40 days | +0.2141 | 4.58% | $154,466 |
+| Composite, all four | 40 days | +0.2205 | **4.86%** | $154,268 |
 
-At the briefed window the primary contrast is underpowered: the MDE of
-$163,114 in total cost exceeds the effect we already know is present
-($144,514). The experiment would fail to reject roughly 30% of the time on an
-effect that is real. Section 4 gives the fix.
+**The requested covariate, pre-period account value, is the weakest of the
+four.** It moves the MDE by $71 out of $158,132.
 
-**On the heavy tail and the CLT.** Per-account cost has skew 33.3 and kurtosis
-1,727, which looks disqualifying for a normal-approximation interval. It is
-not, at this sample size: the sampling distribution of the mean has skew
-`33.3/sqrt(23,867) = 0.21` and excess kurtosis `1,727/23,867 = 0.07`. Both are
-mild, so normal-theory intervals are defensible. A BCa bootstrap will be run
-alongside as a check, and any material disagreement between the two will be
-reported rather than silently resolved.
+Two structural reasons: 68.4% of replay accounts have no pre-period at all, so
+the covariate is zero for two thirds of units; and cost is driven by rare large
+frauds, which an account's own spending history barely predicts.
 
----
-
-## 7. Variance reduction
-
-**CUPED.** Covariate = account activity in the 20 days before the replay
-window. Adjusted outcome `Y* = Y - θ(X - E[X])` with `θ = Cov(Y,X)/Var(X)`.
-
-Measured on the current window:
-
-| Covariate | Coverage | corr with outcome | Variance reduction |
-| --- | --- | --- | --- |
-| pre-period transaction count | 22.4% | +0.024 | 0.06% |
-| pre-period spend | 22.4% | +0.034 | 0.12% |
-| **pre-period fraud count** | 22.4% | **+0.208** | **4.33%** |
-
-Best case lifts power from 69.9% to 71.8%. **CUPED does not work well here**,
-for two structural reasons: only 22.4% of replay-window accounts appear in the
-pre-period at all, so the covariate is zero for three quarters of units; and
-cost is driven by rare large frauds, which are close to unpredictable from an
-account's own history.
-
-I propose implementing it anyway and reporting the measured reduction
-honestly. A pre-registered variance-reduction technique that does not reduce
-variance is a real finding about this data, and burying it would be worse than
-reporting it.
-
-**Winsorization is rejected.** Capping the outcome at p99.9 ($1,919) cuts sd
-from $133.24 to $88.22 and lifts power to 96.3%. It also changes the estimand:
-the large frauds it truncates are precisely the dollars the system exists to
-prevent. It will be reported as a pre-specified robustness check only, never as
-the primary.
-
-**The paired benchmark.** Because this is a replay, every account's outcome is
-known under *both* policies. A within-account paired estimator is available for
-free and is far more efficient:
-
-| Estimator | SE / account | t | MDE (total) |
-| --- | --- | --- | --- |
-| Randomized, between-account | $1.2197 | -2.5 | $163,113 |
-| **Paired, within-account** | **$0.4760** | **-6.4** | **$63,658** |
-
-The randomized design is **2.6x less efficient** and deliberately discards
-information a live experiment could never have had. That is the correct choice
-if the goal is to rehearse the analysis a live test would require, which it is.
-But the spec should be honest that it is a rehearsal cost, so the paired
-estimate will be reported alongside as an oracle benchmark. If the randomized
-and paired estimates disagree materially, that indicates a randomization or
-analysis bug, which makes it a useful diagnostic as well as an honest
-disclosure.
+**Recommendation:** register the four-covariate composite rather than account
+value alone, and state the expected 4.9% reduction in advance so a null cannot
+be reframed after the fact. Implement it, report it honestly, and do not
+present it as a win.
 
 ---
 
-## 8. Analysis plan
+## 7. Pre-registered subgroups
 
-**Estimator.** Difference in mean cost per account, B minus A. Because the unit
-of analysis equals the unit of randomization, a two-sample comparison is
-already cluster-robust; no clustering correction is needed for the primary.
+Definitions fixed in advance, computed from the pre-period only.
 
-**Cluster-robust standard errors.** Required for the secondary transaction-level
-specifications, where covariate adjustment happens at transaction grain. OLS of
-transaction cost on arm plus covariates, **CR2 (bias-reduced) standard errors
-clustered on `account_id`**, Satterthwaite degrees of freedom. With ~47,700
-clusters the small-sample correction is immaterial, but CR2 costs nothing and
-removes an objection. A wild cluster bootstrap will be reported for the primary
-contrast as a robustness check.
+- **New**: no transactions in days 110-149. **Established**: at least one.
+- **Ticket**: account mean transaction amount in the replay window, split at
+  the pooled median of **$78.33**. Registered exactly, since a median computed
+  post hoc would be a researcher degree of freedom.
 
-**SRM check.** Chi-square goodness of fit on **account counts** against the
-intended 50/50, halting threshold p < 0.001, run at every look.
+Measured effects and power:
 
-A nuance worth stating: SRM must be tested on the **randomization unit**, not on
-transactions. Transaction counts will differ between arms by chance because
-cluster sizes vary, and testing those would produce false alarms. Transaction
-imbalance will be reported descriptively and interpreted against the expected
-spread from the cluster size distribution, not tested.
+| Subgroup | Accounts | Effect per account | Total | Power |
+| --- | --- | --- | --- | --- |
+| New | 32,628 | -$4.067 | -$132,697 | 73.6% |
+| Established | 15,106 | -$1.485 | -$22,432 | **15.5%** |
+| Low ticket (< $78.33) | 23,858 | -$0.496 | -$11,830 | **14.5%** |
+| High ticket (>= $78.33) | 23,876 | -$6.002 | -$143,299 | 74.3% |
 
-**Sequential testing.** Lan-DeMets alpha spending with an O'Brien-Fleming
-boundary, two-sided α = 0.05 over five looks. Approximate nominal thresholds:
+Two of the four are underpowered and cannot support a test. They will be
+registered as **descriptive**, reported with intervals, and explicitly excluded
+from any claim. With Bonferroni across four contrasts at α = 0.0125 even the
+powered two drop below 70%, so the subgroup analysis is registered as
+**secondary and exploratory throughout**, with no subgroup permitted to change
+the ship decision.
 
-| Look | Information | Approx. nominal two-sided α |
+The substantive expectation, registered in advance: **the benefit is
+concentrated in new and high-ticket accounts**, and established low-ticket
+accounts see nearly nothing.
+
+---
+
+## 8. The observational simulation
+
+The part that matters most, and the measurements above shape it heavily.
+
+### The fact that drives the design
+
+Effect by account risk quintile, where risk is the account's mean predicted
+probability in the replay window:
+
+| Risk quintile | Accounts | Mean risk | Mean cost, champion | Mean effect |
+| --- | --- | --- | --- | --- |
+| 1 | 9,547 | 0.0024 | $0.32 | **$0.00** |
+| 2 | 9,547 | 0.0037 | $0.57 | **$0.00** |
+| 3 | 9,546 | 0.0065 | $1.35 | **$0.00** |
+| 4 | 9,547 | 0.0144 | $3.34 | +$0.04 |
+| 5 | 9,547 | 0.1200 | $41.19 | **-$16.29** |
+
+**The entire treatment effect lives in the top quintile, and cost varies 130x
+across quintiles.** A confounder that steers assignment by risk therefore moves
+both the outcome and the effect simultaneously. This is close to a worst case
+for naive observational estimation, which makes it an excellent demonstration.
+
+### Assignment mechanism
+
+Non-random rollout by risk profile:
+
+```
+P(challenger | account) = sigmoid( alpha + beta * z(account_risk) )
+```
+
+`alpha` is solved numerically so the realised treated share is 50%, keeping the
+observational and randomised analyses comparable on sample size. `beta`
+controls confounding strength, registered at three levels: **0.5 weak, 1.5
+moderate, 3.0 strong**.
+
+Two directions, both registered, because they bias in opposite ways:
+
+- **Risk-seeking rollout** (`beta > 0`): the stricter policy goes to risky
+  accounts first. Realistic, and the common instinct in fraud teams.
+- **Risk-averse rollout** (`beta < 0`): rollout starts on safe accounts to
+  limit blast radius. Equally realistic and equally common.
+
+Expected directions, registered in advance so the result cannot be
+rationalised afterwards. Risk-seeking puts treatment where cost is highest, so
+the naive comparison should make the challenger look **worse** than it is. The
+true effect is negative, so the bias attenuates or reverses the measured
+benefit. Risk-averse should make the challenger look **better** than it is on
+levels while the true effect in that population is near zero.
+
+### What the analyst is allowed to see
+
+The confounder is the account's replay-window risk. In a real post-hoc analysis
+that is not available: the analyst has history, not the scores the rollout team
+used. The registered covariate set is therefore:
+
+- Pre-period aggregates: value, transaction count, fraud count, has-pre-period
+  indicator
+- Account size in the replay window: transaction count, total amount
+- First replay transaction attributes: amount, has_identity, product code, card
+  type
+
+**How much of the confounder this recovers, measured:**
+
+| Covariate set | R-squared predicting account risk | Residual confounding |
 | --- | --- | --- |
-| 1 | 0.20 | 0.000005 |
-| 2 | 0.40 | 0.0013 |
-| 3 | 0.60 | 0.0084 |
-| 4 | 0.80 | 0.0225 |
-| 5 | 1.00 | 0.0413 |
+| Pre-period only | 0.0218 | 97.8% |
+| Pre-period + account size | 0.0274 | 97.3% |
+| Pre + size + first transaction | **0.0680** | **93.2%** |
 
-Exact boundaries computed by the spending function at implementation. O'Brien-
-Fleming is chosen over Pocock because it spends almost nothing early and
-preserves nearly the full α for the final look, which matters when the design
-is already near the power margin. If a boundary is crossed at an interim look,
-the reported effect will be **bias-adjusted**, since naive estimates at early
-stopping are inflated.
+Even the richest realistic set explains 6.8% of the confounder. Propensity
+matching cannot fix what it cannot see, so substantial residual bias is
+expected. That is the finding, not a flaw in the setup.
 
-**Guardrail test.** One-sided test of the false decline rate against the agreed
-ceiling, evaluated at every look. Guardrail breach vetoes a ship regardless of
-the primary result.
+### Estimators compared
+
+Four, run against the same simulated rollout:
+
+1. **Naive difference in means.** No adjustment. The upper bound on bias.
+2. **PSM on observed covariates.** Logistic propensity, 1:1 nearest neighbour
+   with replacement, caliper 0.2 pooled SD of the logit, common-support
+   trimming. The realistic estimate.
+3. **PSM including the true confounder (oracle).** Identical, plus account
+   risk. Should recover the truth. This is the positive control that separates
+   "the method is broken" from "the analyst could not observe the confounder",
+   and without it the exercise cannot make that distinction.
+4. **Randomised benchmark.** The section 3 result. The truth.
+
+### Diagnostics, reported whether or not they flatter the result
+
+- Standardised mean differences before and after matching, all covariates
+- Propensity overlap, plotted, with the trimmed share
+- Number matched, number discarded, effective sample size
+- Bias of each estimator against the randomised truth, in dollars and percent
+- Bias decomposition against `beta`, showing how it scales with confounding
+- Rosenbaum sensitivity: how large an unmeasured confounder would have to be to
+  overturn the PSM conclusion
+
+### Expected conclusion, registered in advance
+
+Naive is badly biased; PSM on realistic covariates removes a small fraction of
+that bias because it observes 6.8% of the confounder; oracle PSM recovers the
+truth. The lesson is not that PSM is useless but that **PSM is only as good as
+the covariates, and in this setting the covariates are nearly empty.** Writing
+this down now means the result cannot be presented as a surprise later.
 
 ---
 
 ## 9. What gets pre-registered
 
-Written to `reports/stage2_preregistration.md`, committed, and **hashed into
-the commit log before any outcome is computed**. The commit hash is the
-timestamp; the analysis code will refuse to run unless the pre-registration
-file matches its recorded hash.
-
-Contents:
+`reports/stage2_preregistration.md`, committed before any outcome is computed,
+with its hash recorded so the analysis refuses to run against a modified file.
 
 1. Hypotheses, primary and guardrail, stated directionally
-2. Arms, allocation, assignment hash function and `SALT`
-3. Replay window and the exact split boundaries used to train the frozen model
-4. Primary metric definition including the full cost function and its constants
-5. Secondary and exploratory metrics, labelled as such, with the per-transaction
-   rule explicitly marked underpowered
+2. Arms, allocation, hash function and `SALT`
+3. Replay window, pre-period, and the frozen model's split boundaries
+4. Primary metric with the full cost function and its five constants
+5. Secondary metrics; subgroups marked secondary and exploratory
 6. Guardrail ceiling and its one-sided test
-7. Power calculation, MDE, and the assumed sd, as recorded above
-8. Alpha spending function, number and timing of looks, boundary type
-9. CUPED covariate, chosen in advance, with the expected reduction stated up
-   front so a null result cannot be reframed afterwards
-10. Exclusion rules: none planned. If any arise they must be arm-blind and
-    documented as a deviation
-11. The ship decision rule in section 10, stated before any outcome is seen
-12. A deviations log, appended to if anything changes after registration
+7. Power, MDE, the assumed sd, and the acknowledged 78.5%
+8. CUPED covariate chosen in advance, with the expected 4.9% stated up front
+9. Exclusions: none planned; any that arise must be arm-blind and logged
+10. Observational simulation: assignment model, all three `beta` values, both
+    directions, covariate sets, matching parameters
+11. Expected directions of bias, written before running
+12. Ship decision rule from section 10
+13. Deviations log
 
 ---
 
-## 10. Ship decision rule
+## 10. Ship recommendation
 
-Pre-registered, evaluated at the final look or at an interim boundary crossing:
+One page, produced from the randomised analysis only. Ship if all three hold:
 
-**Ship the treatment if all three hold**
-
-1. The primary contrast crosses its alpha-spending boundary in favour of the
-   treatment
-2. The **upper bound** of the 95% CI on cost difference is below zero, that is
-   the treatment is cheaper even in the pessimistic tail
+1. The primary contrast is significant in favour of the challenger at α = 0.05
+2. The **upper bound** of the 95% CI on cost difference is below zero
 3. The guardrail false decline rate is below the agreed ceiling at its upper
    confidence bound
 
-**Do not ship if** the guardrail is breached, regardless of cost.
+Do not ship if the guardrail is breached, whatever the cost result. Declare
+inconclusive if the primary does not reach significance, which at 78.5% power
+happens roughly one run in five and does **not** mean the challenger is
+worthless.
 
-**Declare inconclusive if** the primary fails to cross its boundary. Given the
-power analysis, an inconclusive result is a live possibility at the briefed
-window and does **not** mean the treatment is worthless; it means this design
-could not resolve it. That distinction is pre-registered so it cannot be
-relitigated after the fact.
-
-The recommendation will be reported as an interval, for example "ships at an
-estimated saving of $X per account, 95% CI [$L, $U]", never as a point
-estimate.
+Reported as an interval throughout, never a point estimate.
 
 ---
 
-## 11. Threats to validity
+## 11. Weaknesses, including ones not raised in the brief
 
-| Threat | Handling |
-| --- | --- |
-| Account proxy is constructed, may over- or under-merge | Documented. Over-splitting is conservative; over-merging costs precision. Sensitivity: rerun assignment on `card1` alone as a coarser unit. |
-| Only 22.4% of replay accounts have pre-period data | CUPED weak, reported honestly. Not compensated for elsewhere. |
-| Heavy-tailed outcome | CLT verified adequate at this n (section 6). BCa bootstrap as cross-check. Winsorized robustness check reported separately. |
-| Threshold was chosen on the stage 1 test split | The replay window must not overlap it. This is the main argument for moving the window to day >= 130 and retraining. |
-| No behavioural response in a replay | Stated as a hard limitation. Churn, retry, and support load remain assumptions. |
-| Multiple looks inflate type I error | Alpha spending, with bias adjustment on early stopping. |
-| Cost constants are unvalidated | The entire result is conditional on them. A sensitivity surface over churn probability and LTV will accompany the ship recommendation. |
+| Weakness | Severity | Handling |
+| --- | --- | --- |
+| No viable challenger against the current threshold | **blocking** | Section 3 reframes champion as the pre-model incumbent |
+| Power 78.5%, MDE exceeds the true effect | high | Stated in the pre-registration, not discovered later |
+| Requested CUPED covariate gives 0.09% | high | Register the composite instead; expect 4.9% |
+| Pre-period covers only 31.6% of accounts | high | Guts CUPED and PSM alike; no fix available |
+| Non-inferiority guardrail fails by construction | high | Replace with an absolute ceiling, needs a business input |
+| Two of four subgroups underpowered | medium | Registered as descriptive, cannot drive the decision |
+| Effect concentrated in one quintile | medium | ATE is a poor summary; report the quintile profile alongside |
+| Account proxy is constructed | medium | Documented; sensitivity on `card1` alone as a coarser unit |
+| Pre-period overlaps model training | low | Covariates are account descriptions, but pre-period fraud labels were seen by the model |
+| The randomised design discards the paired counterfactual | low | Paired estimator reported as an oracle benchmark and a bug detector |
+| Outcome of the primary is not in doubt | disclosure | Stated plainly; the value of stage 2 is the machinery |
 
----
+Two things worth raising that were not in the brief.
 
-## 12. Open decisions for review
+**The ATE is close to meaningless here.** With zero effect in three quintiles
+and -$16.29 in the fifth, a single average describes no account in the
+population. The recommendation should carry the quintile profile, and the
+obvious follow-up is a targeted policy that applies the challenger only where
+it acts. That is a stronger result than the ATE and it falls out of the same
+analysis.
 
-1. **Move the replay window to day >= 130 and retrain?** My recommendation is
-   yes. Without it the primary contrast runs at 69.9% power.
-2. **What is the false decline ceiling?** A business input. The 8.0%
-   placeholder is mine and should be replaced.
-3. **Keep CUPED given a measured 4.3% reduction?** My recommendation is keep and
-   report the null honestly.
-4. **Per-transaction rule: exploratory arm or drop entirely?** My
-   recommendation is report as exploratory, excluded from the ship decision.
-5. **Two arms or add a third?** A third arm splits allocation and costs power
-   on the primary. My recommendation is two.
+**The observational simulation is the more valuable half and deserves more
+room.** The randomised arm re-derives a number stage 1 already has. The
+observational arm answers something genuinely unknown: how wrong would we have
+been had this been rolled out non-randomly and analysed post hoc. If effort has
+to be traded, trade it toward section 8.
