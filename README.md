@@ -1,9 +1,9 @@
 # Fraud Risk Decisioning System
 
-**At the cost-optimal decline threshold this system prevents $328,658 of the
-$495,244 in fraud on a held-out 30-day test period, catching 66.4% of fraud
-dollars while declining 6.3% of legitimate transactions. Total modelled cost
-is $296,570, which is $144,514 cheaper than a naive 0.5 cutoff and $280,724
+**At the cost-optimal decline threshold this system prevents $341,479 of the
+$495,244 in fraud on a held-out 30-day test period, catching 69.0% of fraud
+dollars while declining 6.5% of legitimate transactions. Total modelled cost
+is $291,334, which is $155,129 cheaper than a naive 0.5 cutoff and $285,961
 cheaper than approving everything.**
 
 Those figures rest on stated cost assumptions, not measured ones. See
@@ -18,35 +18,31 @@ approve-or-decline decision by pricing every possible threshold in dollars.
 The interesting part is the third step. A fraud model is usually judged on
 PR-AUC, but nobody is paid in PR-AUC. Once each outcome has a price, the
 question becomes where to set the threshold, and the answer is not 0.5. It is
-0.1011. The naive cutoff looks far better on precision (0.74 against 0.27) and
-is 49% more expensive, because it optimizes the wrong thing: it avoids false
+0.1160. The naive cutoff looks far better on precision (0.75 against 0.26) and
+is 53% more expensive, because it optimizes the wrong thing: it avoids false
 declines that cost about $12 each while waving through frauds that cost about
 $176 each.
 
-Four findings worth stating plainly:
+Five findings worth stating plainly:
 
 1. **The optimum is far from 0.5, and the shape around it is not stable.** At
-   this operating point a threshold 20% higher (declining fewer) costs +5.2%,
-   while 20% lower (declining more) costs only +0.9%. At the previous
-   437-feature operating point the asymmetry ran the *other* way. Two models
-   that are statistically indistinguishable on cost disagree about which
-   direction is the dangerous one, which is a warning not to over-read the
-   shape of a curve estimated from 3,282 frauds.
+   this operating point a threshold 20% lower costs +4.6%, 20% higher costs
+   +0.4%. At earlier operating points the asymmetry ran the other way. Do not
+   over-read the local shape of a curve estimated from 3,282 frauds.
 2. **The V block genuinely matters.** A clean ablation on identical splits
-   shows the 339 V columns are worth **+0.0275 test PR-AUC and $17,314 of
-   cost**, with a bootstrap CI of [-$27,894, -$6,624] that does not span zero.
-   An earlier comparison put the figure at +0.0079, but that one was
-   confounded by different training windows and understated them.
-3. **Most features are dead weight, but not all of them.** Pruning to the top
-   200 by gain is statistically indistinguishable from all 437 on cost and
-   trains 19% faster, so it is what ships. Pruning further is not free: the
-   top 100 costs **$11,011 more** and the top 50 **$22,672 more**, both
-   significant.
-4. **Measurement noise is roughly $10,000.** A bootstrap of the cost figure has
-   a standard deviation near $9.9k, so any single change worth less than that
-   cannot be distinguished from luck on this test set. Every cost comparison
-   in `reports/feature_pruning.md` carries a confidence interval for that
-   reason.
+   shows the 339 V columns are worth +0.0275 test PR-AUC and $17,314 of cost,
+   CI [-$27,894, -$6,624], which does not span zero.
+3. **Time-normalising the D columns is the single most consistent improvement
+   found.** Replacing "days since an event" with "the day the event happened"
+   gained **+0.0228 test PR-AUC in 4 of 4 walk-forward folds** and $38,140 of
+   cost. See [improvements_summary.md](reports/improvements_summary.md).
+4. **Chasing the train/test gap made the model worse.** Regularisation closed
+   the gap more than any other change tested and was the worst variant on cost,
+   losing all four folds. The best variant has the widest gap. An earlier
+   version of this README treated the gap as a defect to fix; that was wrong.
+5. **Measurement noise is roughly $10,000.** Any single change worth less than
+   that cannot be told from luck on one test window, which is why every
+   comparison now runs on four folds with intervals.
 
 ## Results
 
@@ -54,20 +50,20 @@ Evaluated on `txn_day >= 150`: 94,636 transactions, 3,282 fraudulent.
 
 | Policy | Total cost | Fraud dollars caught | Legit declined | Saving vs optimum |
 | --- | --- | --- | --- | --- |
-| **Chosen threshold 0.1011** | **$296,570** | $328,658 (66.4%) | 5,734 (6.28%) | - |
-| Naive 0.5 cutoff | $441,085 | $116,633 (23.6%) | 392 (0.43%) | $144,514 |
-| Approve everything | $577,294 | $0 (0%) | 0 (0%) | $280,724 |
-| Decline everything | $1,414,895 | $495,244 (100%) | 91,354 (100%) | $1,118,325 |
+| **Chosen threshold 0.1160** | **$291,334** | $341,479 (69.0%) | 5,960 (6.52%) | - |
+| Naive 0.5 cutoff | $446,463 | $113,617 (22.9%) | 323 (0.35%) | $155,129 |
+| Approve everything | $577,294 | $0 (0%) | 0 (0%) | $285,961 |
+| Decline everything | $1,414,895 | $495,244 (100%) | 91,354 (100%) | $1,123,561 |
 
-| Decision quality | At 0.1011 | At 0.50 |
+| Decision quality | At 0.1160 | At 0.50 |
 | --- | --- | --- |
-| Fraud caught (TP) | 2,139 | 1,127 |
-| Legit declined (FP) | 5,734 | 392 |
-| Fraud missed (FN) | 1,143 | 2,155 |
-| True negatives | 85,620 | 90,962 |
-| Precision | 0.2717 | 0.7419 |
-| Recall | 0.6517 | 0.3434 |
-| False decline rate | 6.277% | 0.429% |
+| Fraud caught (TP) | 2,137 | 992 |
+| Legit declined (FP) | 5,960 | 323 |
+| Fraud missed (FN) | 1,145 | 2,290 |
+| True negatives | 85,394 | 91,031 |
+| Precision | 0.2639 | 0.7544 |
+| Recall | 0.6511 | 0.3023 |
+| False decline rate | 6.524% | 0.354% |
 
 ### Feature-set comparison, identical splits
 
@@ -102,24 +98,45 @@ Bootstrap on the cost difference: mean **-$17,314**, 95% CI
 [-$27,894, -$6,624]. Entirely below zero, so this one is real. The V block is
 the single most valuable feature group in the build.
 
+### Improvement pass
+
+Six experiments on a four-fold walk-forward harness. Two shipped, four
+rejected. Full record in
+[improvements_summary.md](reports/improvements_summary.md).
+
+| Change | Verdict | Evidence |
+| --- | --- | --- |
+| Time-normalise the D columns | **shipped** | +0.0228 PR-AUC, 4 of 4 folds, -$38,140 |
+| Walk-forward harness, out-of-sample threshold | **shipped** | replaces a single window; fixes a protocol flaw |
+| Cost assumption sensitivity surface | **shipped** | 15x threshold range across plausible assumptions |
+| Better account proxy (6 candidates) | rejected | best is -$10k over 4 folds, t = -1.6, 2 of 4 folds |
+| Count-encode high-cardinality categoricals | rejected | +$7,264, cheaper in 1 of 4 folds |
+| Stronger regularisation | rejected | +$17,740, cheaper in 0 of 4 folds |
+
+The threshold was previously swept on the test split, which is optimistic. It
+is now chosen on cross-fitted out-of-fold calibration probabilities and only
+then applied to test.
+
 ## Model quality
 
 | Metric | Value |
 | --- | --- |
-| PR-AUC, test, raw | 0.5015 |
-| PR-AUC, test, calibrated | 0.4794 |
-| ROC-AUC, test | 0.8839 |
-| Brier, test, raw | 0.023162 |
-| Brier, test, calibrated | 0.023176 |
-| PR-AUC, train | 0.8964 |
-| Best iteration | 494 of 3000 |
-| Features | 200 of 437 available |
+| PR-AUC, test, raw | 0.4933 |
+| PR-AUC, test, calibrated | 0.4757 |
+| ROC-AUC, test | 0.8926 |
+| Brier, test, raw | 0.024119 |
+| Brier, test, calibrated | 0.023636 |
+| PR-AUC, train | 0.9448 |
+| Features | 200, with D columns time-normalised |
 
-Sensitivity: a threshold 20% lower (0.0809, declining more) costs +0.87%; 20%
-higher (0.1213, declining fewer) costs +5.16%. At the 437-feature operating
-point the asymmetry ran the opposite way (+6.24% lower, +0.70% higher). Two
-models that cannot be told apart on cost disagree on which direction is
-riskier, so the local shape of the curve should not be treated as a finding.
+Isotonic calibration now **improves** Brier on test (0.024119 to 0.023636,
++2.00%), the first time in this project. Two earlier attempts to fix that by
+restructuring the splits failed; a feature transform resolved it.
+
+Sensitivity: a threshold 20% lower (0.0928) costs +4.60%; 20% higher (0.1392)
+costs +0.42%. The direction of this asymmetry has flipped between model
+versions that cannot be told apart on cost, so it should not be treated as a
+finding.
 
 **Caveat on the measurement.** A bootstrap of the cost at the chosen threshold
 has a standard deviation of about $9,900 and a 95% interval roughly $38,000
@@ -264,6 +281,13 @@ cd fraud_dbt && set -a && source ../.env && set +a && dbt build && dbt docs gene
 python src/verify_part1.py && python src/train_model.py && python src/decision_layer.py
 ```
 
+Experiments, all offline against the cached parquet and none requiring
+Snowflake:
+
+```bash
+python src/cost_sensitivity.py && python src/exp_account_proxy.py && python src/exp_model_improvements.py
+```
+
 The model stage reads `data/parquet/fct_transactions.parquet` if it exists and
 only queries Snowflake otherwise, so **steps 2 and 3 can be skipped entirely
 once that file exists**. This is deliberate: the Snowflake account is a 30-day
@@ -283,12 +307,17 @@ materialising it in memory; peak usage is about 1.6 GB.
   did not eliminate it. The remaining cause is period-to-period drift, which
   argues for refitting the calibrator on a rolling recent window.
 - **No drift monitoring**, which is what would catch the above in production.
-- **Pruning was selected on the test split.** The top-200 set was chosen by
-  comparing test cost across four candidates, so the choice is mildly
-  optimistic. A clean confirmation needs a fresh holdout or walk-forward folds.
-- **The overfitting gap did not close.** Pruning to 200 features left it at
-  0.3949, slightly wider than 0.3712 at 437. Regularization and hyperparameter
-  tuning, not feature count, are the remaining levers.
+- **Pruning was selected on the test split**, before the walk-forward harness
+  existed. It should be re-run on the four folds.
+- **Richer account-derived features are the open opportunity.** Only 8 of 200
+  features derive from the account key, which is why swapping the key changed
+  little. Building more backward-looking aggregates over it is untested and is
+  the most promising remaining lever.
+- **The train/test gap is not a useful target.** Attacking it directly made the
+  model worse. Left as is, deliberately.
+- **The cost model has one global threshold.** A per-transaction
+  expected-cost rule is the correct decision rule under these assumptions and
+  is implemented nowhere. It measured -$5,186 with a CI spanning zero.
 - **No CI, no scheduling, no serving.** No orchestration, no API, no monitoring
   of live scores.
 - **Cost assumptions are unvalidated.** They should come from finance, not from

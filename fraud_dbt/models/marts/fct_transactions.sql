@@ -115,6 +115,26 @@ featured AS (
         {% endfor %}
         {% for i in range(1, 16) %}d{{ i }},
         {% endfor %}
+
+        -- Time-normalised D columns.
+        --
+        -- D1-D15 are "days since some prior event", so as raw counters they
+        -- drift with calendar time: a split learned at day 80 does not mean
+        -- the same thing at day 170. Because evaluation is a forward time
+        -- split, that drift costs real accuracy. Subtracting from txn_day
+        -- converts each into the fixed day the event happened, which is
+        -- stationary, and incidentally lets the model form its own grouping
+        -- of transactions sharing a card history.
+        --
+        -- Measured on four walk-forward folds: +0.0228 test PR-AUC, better in
+        -- 4 folds out of 4, and $38,140 lower cost. See
+        -- reports/model_improvements.md.
+        --
+        -- D9 is deliberately excluded. It ranges 0 to 0.958 and is a
+        -- time-of-day fraction, not a day offset, so normalising it would be
+        -- meaningless.
+        {% for i in [1,2,3,4,5,6,7,8,10,11,12,13,14,15] %}txn_day - d{{ i }} AS d{{ i }}_norm,
+        {% endfor %}
         {% for i in range(1, 10) %}m{{ i }},
         {% endfor %}
 
