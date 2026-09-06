@@ -1,0 +1,19 @@
+scenario,beta,estimator,estimate,ci_low,ci_high,true_ATT,true_ATE,bias_vs_ATT,bias_pct_vs_ATT,bias_vs_ATE,sign_correct
+beta +0.5 (risk-seeking),0.5,naive difference,0.5158,,,-5.383,-3.2499,5.8988,109.6,3.7657,NO
+beta +0.5 (risk-seeking),0.5,"PSM, observed covariates",-1.3822,-3.2974,0.2076,-5.383,-3.2499,4.0008,74.3,1.8676,yes
+beta +0.5 (risk-seeking),0.5,"PSM, oracle (includes risk)",-9.4297,-12.148,-6.5752,-5.383,-3.2499,-4.0467,-75.2,-6.1798,yes
+beta +1.5 (risk-seeking),1.5,naive difference,5.6138,,,-6.1864,-3.2499,11.8002,190.7,8.8637,NO
+beta +1.5 (risk-seeking),1.5,"PSM, observed covariates",4.1011,2.6733,5.5606,-6.1864,-3.2499,10.2875,166.3,7.3509,NO
+beta +1.5 (risk-seeking),1.5,"PSM, oracle (includes risk)",-0.8856,-2.3848,0.6225,-6.1864,-3.2499,5.3008,85.7,2.3643,yes
+beta +3.0 (risk-seeking),3.0,naive difference,8.1273,,,-6.4688,-3.2499,14.596,225.6,11.3771,NO
+beta +3.0 (risk-seeking),3.0,"PSM, observed covariates",6.3299,5.0154,7.5309,-6.4688,-3.2499,12.7987,197.9,9.5798,NO
+beta +3.0 (risk-seeking),3.0,"PSM, oracle (includes risk)",1.4367,-0.2785,2.9938,-6.4688,-3.2499,7.9055,122.2,4.6866,NO
+beta -0.5 (risk-averse),-0.5,naive difference,-7.9247,,,-0.9709,-3.2499,-6.9538,-716.2,-4.6748,yes
+beta -0.5 (risk-averse),-0.5,"PSM, observed covariates",-4.5365,-6.19,-3.0688,-0.9709,-3.2499,-3.5656,-367.3,-1.2866,yes
+beta -0.5 (risk-averse),-0.5,"PSM, oracle (includes risk)",-0.9321,-2.0326,0.4033,-0.9709,-3.2499,0.0388,4.0,2.3178,yes
+beta -1.5 (risk-averse),-1.5,naive difference,-10.7969,,,-0.1318,-3.2499,-10.6651,-8091.2,-7.547,yes
+beta -1.5 (risk-averse),-1.5,"PSM, observed covariates",-4.5762,-5.9806,-3.1892,-0.1318,-3.2499,-4.4444,-3371.8,-1.3263,yes
+beta -1.5 (risk-averse),-1.5,"PSM, oracle (includes risk)",0.2786,-0.7426,1.2842,-0.1318,-3.2499,0.4104,311.4,3.5285,NO
+beta -3.0 (risk-averse),-3.0,naive difference,-12.6438,,,-0.1177,-3.2499,-12.5261,-10639.8,-9.3939,yes
+beta -3.0 (risk-averse),-3.0,"PSM, observed covariates",-5.9158,-7.4914,-4.3984,-0.1177,-3.2499,-5.7981,-4924.9,-2.6659,yes
+beta -3.0 (risk-averse),-3.0,"PSM, oracle (includes risk)",0.3061,-0.6292,1.1335,-0.1177,-3.2499,0.4239,360.0,3.556,NO

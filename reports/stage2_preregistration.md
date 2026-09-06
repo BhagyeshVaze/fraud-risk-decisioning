@@ -345,4 +345,7 @@ with its reason.
 
 | Date | Deviation | Reason |
 | --- | --- | --- |
-| - | none so far | - |
+| 2026-09-06 | Section 10 named the randomised estimate as "the benchmark truth". Bias is instead reported primarily against the **exact ATE** (-$3.2499), with the randomised estimate also shown. | In a replay both potential outcomes are known for every account, so the ATE is computable exactly rather than estimated. The randomised figure is one noisy draw at that quantity and using it as the target would conflate sampling error with estimator bias. Clarification, not a change of target. |
+| 2026-09-06 | Added the **true ATT** alongside the true ATE as an evaluation target. | Propensity matching estimates the effect on the treated. The effect is strongly heterogeneous, so under a risk-steered rollout the ATT differs from the ATE by construction. Scoring an ATT estimator against the ATE would charge estimand mismatch to confounding. Not anticipated in the registration. |
+| 2026-09-06 | Rosenbaum sensitivity reported as **inapplicable** rather than as a bound. | 83-95% of matched pairs have an outcome difference of exactly zero and the top 1% of differences carries 55-79% of the mass. A signed-rank statistic counts pairs while the effect lives in the size of a few. Shown to be inapplicable rather than dropped. |
+| 2026-09-06 | Three code defects found and fixed during the randomised run: a factor-of-sqrt(m) error in the clustered ratio SE, a truncated BCa jackknife, and logic that would have declared the bootstrap interval authoritative on disagreement. | Bugs, not design changes. The third would have violated the registration and is noted because it was caught before it affected a reported result. |

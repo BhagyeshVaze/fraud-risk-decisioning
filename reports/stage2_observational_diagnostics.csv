@@ -1,0 +1,13 @@
+scenario,psm,treated_matched,unique_controls,dropped_support,dropped_caliper,caliper,mean_abs_SMD_before,mean_abs_SMD_after
+beta +0.5 (risk-seeking),observed,23866,7723,0,14,0.0244,0.0313,0.0089
+beta +0.5 (risk-seeking),oracle,23699,9865,117,64,0.0989,0.0446,0.0152
+beta +1.5 (risk-seeking),observed,23855,7633,0,12,0.0418,0.045,0.011
+beta +1.5 (risk-seeking),oracle,23011,9292,802,54,0.3042,0.0642,0.0113
+beta +3.0 (risk-seeking),observed,23907,7367,0,20,0.0587,0.0548,0.0115
+beta +3.0 (risk-seeking),oracle,22629,8707,1255,43,0.4157,0.0763,0.0172
+beta -0.5 (risk-averse),observed,24010,7700,0,4,0.0214,0.0231,0.0084
+beta -0.5 (risk-averse),oracle,24012,9875,1,1,0.0947,0.0366,0.0107
+beta -1.5 (risk-averse),observed,23831,7575,3,3,0.0422,0.0431,0.0169
+beta -1.5 (risk-averse),oracle,23837,9438,0,0,0.287,0.0619,0.0126
+beta -3.0 (risk-averse),observed,23758,7466,2,1,0.0543,0.0579,0.0122
+beta -3.0 (risk-averse),oracle,23751,8798,10,0,0.4133,0.0792,0.0123
