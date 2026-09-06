@@ -9,6 +9,26 @@ cheaper than approving everything.**
 Those figures rest on stated cost assumptions, not measured ones. See
 [Cost assumptions](#cost-assumptions).
 
+## If you read nothing else
+
+- **Moving the decline threshold off 0.5 is worth $155,129** on a 30-day test
+  period. The naive cutoff has far better precision (0.75 against 0.26) and is
+  53% more expensive, because it optimizes the wrong quantity.
+- **A random train/test split inflates PR-AUC by +0.3317 on this data**, which
+  is more than the entire gain from replacing logistic regression with tuned
+  gradient boosting (+0.3070). Most published numbers on IEEE-CIS use random
+  splits. [Detail](#why-this-pr-auc-is-lower-than-published-numbers).
+- **Pre-registration changed a shipping decision.** Two standard confidence
+  intervals disagreed on whether zero was excluded. The registration named one
+  as primary before any result existed, so the answer was "do not ship" rather
+  than "ship." [Detail](#stage-2-a-pre-registered-replay-experiment).
+- **Every standard propensity-matching diagnostic passed while the estimate
+  had the wrong sign.** Balance scores of 0.009 to 0.017 against a 0.1
+  threshold, textbook overlap, and an effect that was positive when the truth
+  was negative. [Detail](#the-observational-half).
+- **Measurement noise is about $10,000**, so several of this project's own
+  improvements are reported as indistinguishable from luck rather than as wins.
+
 ## What it does and what it found
 
 The system scores card-not-present transactions for fraud, converts the score
@@ -20,8 +40,15 @@ PR-AUC, but nobody is paid in PR-AUC. Once each outcome has a price, the
 question becomes where to set the threshold, and the answer is not 0.5. It is
 0.1160. The naive cutoff looks far better on precision (0.75 against 0.26) and
 is 53% more expensive, because it optimizes the wrong thing: it avoids false
-declines that cost about $12 each while waving through frauds that cost about
-$176 each.
+declines that cost about **$17.56** each while waving through frauds that cost
+about **$159.29** each, a ratio of roughly **9 to 1**.
+
+Those two figures are arithmetic on the assumed prices, not measurements. A
+false decline is 2.5% of $222.48 lost margin, plus $10.00 churn-weighted
+lifetime value, plus $2.00 review. A missed fraud is the $134.29 average value
+of the frauds the model actually misses, plus the $25.00 chargeback fee. The
+missed ones are smaller than the average fraud because the model already
+catches the large obvious ones.
 
 Five findings worth stating plainly:
 
@@ -207,6 +234,140 @@ those is a modelling result; the other is measurement error. A published 0.80
 on a random split and the 0.4933 reported here are not evidence of different
 model quality.
 
+## Stage 2: a pre-registered replay experiment
+
+A counterfactual replay, not a live experiment, and the distinction is stated
+everywhere it matters. Labels are known, so the exact cost of any policy on
+real outcomes is computable. No outcome is simulated. Randomisation is at the
+**account** level, because fraud rings share cards and transaction-level
+assignment would leak treatment across the network.
+
+The design and every assumption were written to
+[stage2_preregistration.md](reports/stage2_preregistration.md) and committed at
+`e5bb4f5`, a documentation-only commit containing **zero lines of analysis
+code**, before any of it was run.
+
+### The randomised arm: inconclusive
+
+Champion 0.5000 against challenger 0.1160, 47,734 accounts split by md5 hash.
+
+```
+difference        $ -1.7745 per account   ($-84,705 scaled)
+SE                $  0.9469
+t                    -1.874
+p (two-sided)      0.0609
+95% CI (normal)   [-$3.6304, +$0.0813]
+```
+
+**Not significant. Decision: DO NOT SHIP.**
+
+The truth is knowable here, because a replay gives both potential outcomes for
+every account: the exact effect is **-$3.2499** per account. The challenger
+really is better. The experiment measured about half of it and correctly
+declined to conclude.
+
+That is the registered outcome at **78.5% power**, which the pre-registration
+recorded as "roughly one run in five" and explicitly declined to round up to
+80%. The MDE of $158,132 exceeds the true effect of $155,129, and this was
+written down before running rather than discovered afterwards.
+
+### Why pre-registration earned its place
+
+The two standard confidence intervals disagreed:
+
+| Interval | Result | Verdict |
+| --- | --- | --- |
+| Normal-theory | [-$3.6304, **+$0.0813**] | includes zero, do not ship |
+| BCa bootstrap | [-$3.7550, **-$0.0856**] | excludes zero, ship |
+
+Free choice after the fact flips the decision. The registration named the
+normal interval as primary and the bootstrap as a cross-check, written before
+any result existed, so the answer is "do not ship" and the disagreement is
+reported rather than resolved in the convenient direction.
+
+Worth recording plainly: **the first draft of the analysis code contained logic
+that declared the bootstrap interval "authoritative" whenever the two
+disagreed.** That would have produced a ship recommendation and looked
+entirely reasonable in isolation. It was removed before it touched a reported
+result, and its removal is in the commit history.
+
+Two other registered items came out negative and are reported as such. CUPED
+delivered **3.40%** variance reduction against a registered expectation of
+4.9%, because only 31.6% of replay accounts exist in the pre-period at all. The
+guardrail passed: false decline rate 6.36%, upper bound 6.84%, against an 8.0%
+ceiling fixed in advance.
+
+### The observational half
+
+The part worth reading. Real rollouts are not randomised: teams ship to risky
+accounts first. So the same question was re-run that way, and the estimate
+compared against the known truth.
+
+| Scenario | True ATT | Naive | PSM (observed) | PSM (oracle) |
+| --- | --- | --- | --- | --- |
+| **beta +3.0 risk-seeking** | -$6.47 | **+$8.13** | **+$6.33** | +$1.44 |
+| beta +1.5 risk-seeking | -$6.19 | **+$5.61** | **+$4.10** | -$0.89 |
+| beta +0.5 risk-seeking | -$5.38 | +$0.52 | -$1.38 | -$9.43 |
+| beta -0.5 risk-averse | -$0.97 | -$7.92 | -$4.54 | -$0.93 |
+| beta -1.5 risk-averse | -$0.13 | -$10.80 | -$4.58 | +$0.28 |
+| beta -3.0 risk-averse | -$0.12 | -$12.65 | -$5.92 | +$0.42 |
+
+**A risk-seeking rollout reverses the sign.** The challenger saves $6.47 per
+account and the naive estimate says it costs $8.13. A team would kill a working
+policy. A risk-averse rollout does the opposite, overstating a $0.13 benefit as
+$10.80, roughly 80-fold.
+
+**Propensity matching removed 12% of that bias and still got the sign wrong.**
+This was predictable and was predicted: the covariate set a real post-hoc
+analyst would have explains only **6.8%** of the variable that drove
+assignment. You cannot adjust for what you cannot observe.
+
+### The finding that should worry people
+
+**Every standard diagnostic passes while the estimate is wrong-signed.**
+
+- Post-match mean absolute standardised difference: **0.009 to 0.017** across
+  all six scenarios, far inside the conventional 0.1 threshold
+- Propensity overlap: near-total
+
+An analyst checks balance, checks overlap, sees green, and publishes a number
+with the wrong sign. Those diagnostics measure balance on the covariates you
+have. They are silent about the one you left out.
+
+### The oracle arm, and why it also fails
+
+An arm was included that is *handed* the true confounder. Without it you cannot
+distinguish "matching is unreliable" from "the analyst was missing something,"
+and that distinction is the entire lesson.
+
+It does not rescue the estimate at strong confounding: bias **+$7.91** at
+beta +3.0. The diagnostics say why. As confounding rises the arms stop
+overlapping, and **1,255 treated accounts are dropped** for having no
+comparable control. Supplying the missing variable solves the identification
+problem and creates a support problem.
+
+### Registered expectations that were contradicted
+
+Recorded because a pre-registration is only worth something if the misses are
+reported too.
+
+| Registered expectation | Outcome |
+| --- | --- |
+| Naive most biased, bias rising with confounding | **confirmed**, all six scenarios |
+| Risk-seeking understates, risk-averse overstates | **confirmed** |
+| Oracle PSM recovers the truth | **contradicted**, fails at strong confounding |
+| Targeted application beats uniform application | **contradicted**, buys 0.1% fewer false declines |
+| Rosenbaum sensitivity would bound the conclusion | **inapplicable**, 83-95% of matched pairs differ by exactly zero and the top 1% carries over half the mass, so a rank statistic has no purchase |
+
+The Rosenbaum result is reported as inapplicable with the numbers that make it
+inapplicable, rather than dropped or given a meaningless Gamma.
+
+Full detail: [randomised arm](reports/stage2_randomized_results.md),
+[observational half](reports/stage2_observational_results.md),
+[design spec](reports/stage2_design_spec.md).
+
+![observational bias](reports/stage2_observational.png)
+
 ## Architecture
 
 ```
@@ -382,13 +543,17 @@ materialising it in memory; peak usage is about 1.6 GB.
   substantially.
 - **The account proxy is unvalidated.** It should be checked against `card2`,
   `card5`, and device fingerprints before anyone trusts it.
-- **Calibration drift is unresolved.** Separating the early-stopping and
-  calibration windows shrank the Brier degradation from -0.77% to -0.11% but
-  did not eliminate it. The remaining cause is period-to-period drift, which
-  argues for refitting the calibrator on a rolling recent window.
+- **Calibration is fixed but not understood.** Isotonic now improves Brier on
+  test by 2.00% (0.024119 to 0.023636), after two earlier attempts to fix it by
+  restructuring the splits both failed. What resolved it was a feature
+  transform, D-normalisation, which is not an obvious mechanism for a
+  calibration problem. A rolling-window calibrator is still the right defence
+  against period-to-period drift and remains unbuilt.
 - **No drift monitoring**, which is what would catch the above in production.
 - **Pruning was selected on the test split**, before the walk-forward harness
-  existed. It should be re-run on the four folds.
+  existed. The harness now exists, so this is a concrete task rather than a
+  caveat: re-run `python src/experiments.py prune` against the four folds and
+  confirm the top-200 set still wins. It may not.
 - **Richer account-derived features are the open opportunity.** Only 8 of 200
   features derive from the account key, which is why swapping the key changed
   little. Building more backward-looking aggregates over it is untested and is
